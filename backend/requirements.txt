@@ -6,6 +6,8 @@ supabase
 python-dotenv
 pydantic
 pydantic-settings
+bcrypt==4.1.2
+PyJWT==2.8.0
 email-validator>=2.0.0
 dnspython>=2.0.0
 langgraph
