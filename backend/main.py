@@ -6,7 +6,8 @@ import os
 from dotenv import load_dotenv
 from datetime import datetime, timedelta
 import jwt
-import bcrypt
+import hashlib
+import secrets
 from pydantic import BaseModel, EmailStr
 from typing import Optional
 import uuid
@@ -21,7 +22,7 @@ ACCESS_TOKEN_EXPIRE_MINUTES = 30
 
 # Pydantic Models
 class LoginRequest(BaseModel):
-    email: EmailStr
+    email: str  # Using str instead of EmailStr to avoid dependency issues
     password: str
     role: str  # "admin" or "employee"
 
@@ -43,7 +44,7 @@ MOCK_USERS = {
         "id": "admin-uuid",
         "email": "admin@miles.com",
         "name": "System Administrator",
-        "password_hash": b"$2b$12$LQv3c1yqBWVHxkd0LHAkCOYz6TtxMQJqhN8/5j7nMxgK5YHqjKxm",  # admin123
+        "password_hash": "91f185d20ba579984919911cd4badc0a:06141d42e82040112fed6bbc40745aec30beedc935f6362c1ac468f1edb0bfa5",  # admin123
         "role": "admin",
         "is_active": True
     },
@@ -51,16 +52,26 @@ MOCK_USERS = {
         "id": "employee-uuid",
         "email": "employee@miles.com",
         "name": "Sample Employee",
-        "password_hash": b"$2b$12$8K1p/5wX7VzqQ8fF0n3Oe.VfQzX9dLrX8Vx9nX5Yj1n6q7wXa9u2",  # employee123
+        "password_hash": "3a06787b21c181682c4cdde94a5b122d:c639bf6358b6a8bb7035b93404775d27121f6a078049cc30f4d45275288a94a7",  # employee123
         "role": "employee",
         "is_active": True
     }
 }
 
-# Authentication Functions
-def verify_password(plain_password: str, hashed_password: bytes) -> bool:
+# Simple password hashing for demo (use proper hashing in production)
+def get_password_hash(password: str, salt: str = None) -> str:
+    """Hash a password with salt"""
+    if salt is None:
+        salt = secrets.token_hex(16)
+    return f"{salt}:{hashlib.sha256((salt + password).encode()).hexdigest()}"
+
+def verify_password(plain_password: str, hashed_password: str) -> bool:
     """Verify a password against its hash"""
-    return bcrypt.checkpw(plain_password.encode('utf-8'), hashed_password)
+    try:
+        salt, hash_value = hashed_password.split(':', 1)
+        return hashlib.sha256((salt + plain_password).encode()).hexdigest() == hash_value
+    except:
+        return False
 
 def create_access_token(data: dict, expires_delta: Optional[timedelta] = None):
     """Create JWT access token"""
