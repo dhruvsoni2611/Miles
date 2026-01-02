@@ -77,6 +77,8 @@ CREATE TABLE IF NOT EXISTS public.tasks (
   due_date TIMESTAMPTZ,
   notes TEXT,
 
+  progress INT DEFAULT 0 CHECK (progress BETWEEN 0 AND 100),
+
   created_at TIMESTAMPTZ DEFAULT NOW(),
   updated_at TIMESTAMPTZ DEFAULT NOW()
 );

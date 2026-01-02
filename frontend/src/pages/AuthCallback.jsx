@@ -1,7 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { supabase } from '../lib/supabase';
-import GlassBackground from '../components/GlassBackground';
 
 const AuthCallback = () => {
   const [loading, setLoading] = useState(true);
@@ -85,12 +84,11 @@ const AuthCallback = () => {
   }, [navigate]);
 
   return (
-    <GlassBackground>
-      <div className="min-h-screen flex items-center justify-center py-12 px-4 sm:px-6 lg:px-8">
-        <div className="max-w-md w-full space-y-8 floating-animation">
-          <div className="glass-card p-8">
-            <div className="text-center">
-              <div className="mx-auto h-20 w-20 bg-gradient-to-r from-indigo-500/30 to-purple-500/30 rounded-full flex items-center justify-center backdrop-blur-sm border border-white/20 mb-4">
+    <div className="min-h-screen bg-gray-50 flex items-center justify-center py-12 px-4 sm:px-6 lg:px-8">
+      <div className="max-w-md w-full space-y-8">
+        <div className="bg-white rounded-lg shadow-sm border border-gray-200 p-8">
+          <div className="text-center">
+            <div className="mx-auto h-20 w-20 bg-blue-600 rounded-full flex items-center justify-center mb-4">
                 {loading ? (
                   <svg className="animate-spin h-10 w-10 text-white" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
                     <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
@@ -107,34 +105,35 @@ const AuthCallback = () => {
                 )}
               </div>
 
-              <h2 className="mt-6 text-center text-3xl font-bold text-white">
-                {loading ? 'Authenticating...' : error ? 'Authentication Failed' : 'Success!'}
-              </h2>
+              <div>
+                <h2 className="mt-6 text-center text-3xl font-bold text-gray-900">
+                  {loading ? 'Authenticating...' : error ? 'Authentication Failed' : 'Success!'}
+                </h2>
 
-              <p className="mt-2 text-center text-sm text-white/80">
-                {loading
-                  ? 'Please wait while we complete your authentication.'
-                  : error
-                    ? error
-                    : 'Redirecting you to your dashboard...'
-                }
-              </p>
+                <p className="mt-2 text-center text-sm text-gray-600">
+                  {loading
+                    ? 'Please wait while we complete your authentication.'
+                    : error
+                      ? error
+                      : 'Redirecting you to your dashboard...'
+                  }
+                </p>
 
-              {error && (
-                <div className="mt-6">
-                  <button
-                    onClick={() => navigate('/login')}
-                    className="glass-button-primary w-full"
-                  >
-                    Return to Login
-                  </button>
-                </div>
-              )}
+                {error && (
+                  <div className="mt-6">
+                    <button
+                      onClick={() => navigate('/login')}
+                      className="w-full bg-blue-600 hover:bg-blue-700 text-white font-medium py-2 px-4 rounded-md shadow-sm transition-colors"
+                    >
+                      Return to Login
+                    </button>
+                  </div>
+                )}
+              </div>
             </div>
           </div>
         </div>
-      </div>
-    </GlassBackground>
+    </div>
   );
 };
 

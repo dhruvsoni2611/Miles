@@ -1,7 +1,6 @@
 import React from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
-import GlassBackground from '../components/GlassBackground';
 
 const Home = () => {
   const { isAuthenticated, user, logout } = useAuth();
@@ -25,14 +24,14 @@ const Home = () => {
   };
 
   return (
-    <GlassBackground>
+    <div className="min-h-screen bg-gray-50">
       {/* Navigation */}
-      <nav className="glass-nav">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-          <div className="flex justify-between items-center py-4">
+      <nav className="bg-white border-b border-gray-200 shadow-sm">
+        <div className="w-full px-4 sm:px-6 lg:px-8 py-4">
+          <div className="flex justify-between items-center">
             <div className="flex items-center">
               <div className="flex items-center space-x-3">
-                <div className="w-10 h-10 bg-gradient-to-r from-indigo-500/30 to-purple-500/30 rounded-lg flex items-center justify-center backdrop-blur-sm border border-white/20">
+                <div className="w-10 h-10 bg-blue-600 rounded-lg flex items-center justify-center">
                   <svg className="w-6 h-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 10V3L4 14h7v7l9-11h-7z" />
                   </svg>
@@ -156,7 +155,7 @@ const Home = () => {
           </div>
         )}
       </div>
-    </GlassBackground>
+    </div>
   );
 };
 

@@ -12,10 +12,10 @@ const ProtectedRoute = ({ children, requiredRole }) => {
 
   if (loading) {
     return (
-      <div className="min-h-screen bg-gradient-to-br from-indigo-900 via-purple-900 to-pink-900 flex items-center justify-center">
-        <div className="glass-card p-8 text-center floating-animation">
-          <div className="animate-spin rounded-full h-16 w-16 border-2 border-white/30 border-t-white mx-auto"></div>
-          <p className="mt-6 text-white/80 font-medium">Loading...</p>
+      <div className="min-h-screen bg-gray-50 flex items-center justify-center">
+        <div className="bg-white rounded-lg shadow-sm border border-gray-200 p-8 text-center">
+          <div className="animate-spin rounded-full h-16 w-16 border-2 border-blue-200 border-t-blue-600 mx-auto"></div>
+          <p className="mt-6 text-gray-600 font-medium">Loading...</p>
         </div>
       </div>
     );

@@ -1,7 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
-import GlassBackground from '../components/GlassBackground';
 import { supabase } from '../lib/supabase';
 
 const Login = () => {
@@ -126,24 +125,21 @@ const Login = () => {
   };
 
   return (
-    <GlassBackground>
-      {/* Modal Backdrop */}
-      <div className={`fixed inset-0 bg-black/50 backdrop-blur-sm z-40 transition-opacity duration-300 ${showModal ? 'opacity-100' : 'opacity-0'}`} />
-
+    <div className="min-h-screen bg-gray-50 flex items-center justify-center p-4">
       {/* Modal */}
-      <div className={`fixed inset-0 z-50 flex items-center justify-center p-4 transition-all duration-300 ${showModal ? 'opacity-100 scale-100' : 'opacity-0 scale-95'}`}>
-        <div className="glass-card w-full max-w-md mx-auto p-8 floating-animation">
+      <div className={`w-full max-w-md transition-all duration-300 ${showModal ? 'opacity-100 scale-100' : 'opacity-0 scale-95'}`}>
+        <div className="bg-white rounded-lg shadow-xl p-8">
           {/* Modal Header */}
           <div className="text-center mb-8">
-            <div className="mx-auto h-16 w-16 bg-gradient-to-r from-indigo-500/30 to-purple-500/30 rounded-full flex items-center justify-center backdrop-blur-sm border border-white/20 mb-4">
+            <div className="mx-auto h-16 w-16 bg-blue-600 rounded-full flex items-center justify-center mb-4">
               <svg className="h-8 w-8 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 21V5a2 2 0 00-2-2H7a2 2 0 00-2 2v16m14 0h2m-2 0h-5m-9 0H3m2 0h5M9 7h1m-1 4h1m4-4h1m-1 4h1m-5 10v-5a1 1 0 011-1h2a1 1 0 011 1v5m-4 0h4" />
               </svg>
             </div>
-            <h1 className="text-2xl font-bold text-white mb-2">
-              {isSignup ? 'Join Workvillage.AI' : 'Welcome to Workvillage.AI'}
+            <h1 className="text-2xl font-bold text-gray-900 mb-2">
+              {isSignup ? 'Join WorkVillage' : 'Welcome to WorkVillage'}
             </h1>
-            <p className="text-white/80 text-sm">
+            <p className="text-gray-600 text-sm">
               {isSignup ? 'Create your account and choose your role' : 'Please login to continue'}
             </p>
           </div>
@@ -179,7 +175,7 @@ const Login = () => {
                     type="text"
                     autoComplete="name"
                     required
-                    className="glass-input w-full"
+                    className="w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 text-black"
                     placeholder="Enter your full name"
                     value={signupData.name}
                     onChange={handleSignupInputChange}
@@ -195,7 +191,7 @@ const Login = () => {
                     id="role"
                     name="role"
                     required
-                    className="glass-input w-full bg-white/10 border-2 border-indigo-400/50 focus:border-indigo-400"
+                    className="w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 text-black"
                     value={signupData.role}
                     onChange={handleSignupInputChange}
                   >
@@ -214,7 +210,7 @@ const Login = () => {
 
             {/* Email Input */}
             <div>
-              <label htmlFor="email" className="block text-sm font-medium text-white/90 mb-2">
+              <label htmlFor="email" className="block text-sm font-medium text-black mb-2">
                 Email
               </label>
               <input
@@ -223,7 +219,7 @@ const Login = () => {
                 type="email"
                 autoComplete="email"
                 required
-                className="glass-input w-full"
+                className="glass-input w-full text-black"
                 placeholder="Enter your email"
                 value={isSignup ? signupData.email : formData.email}
                 onChange={isSignup ? handleSignupInputChange : handleInputChange}
@@ -232,16 +228,16 @@ const Login = () => {
 
             {/* Password Input */}
             <div>
-              <label htmlFor="password" className="block text-sm font-medium text-white/90 mb-2">
+              <label htmlFor="password" className="block text-sm font-medium text-black mb-2">
                 Password
               </label>
               <input
                 id="password"
                 name="password"
                 type="password"
-                autoComplete={isSignup ? "new-password" : "current-password"}
+                autoComplete="password"
                 required
-                className="glass-input w-full"
+                className="glass-input w-full text-black"
                 placeholder="Enter your password"
                 value={isSignup ? signupData.password : formData.password}
                 onChange={isSignup ? handleSignupInputChange : handleInputChange}
@@ -269,36 +265,6 @@ const Login = () => {
               </div>
             )}
 
-            {/* Info Section */}
-            <div className="glass-card p-4 border-blue-400/30 bg-blue-500/10">
-              <div className="flex items-start">
-                <div className="flex-shrink-0">
-                  <svg className="h-5 w-5 text-blue-400 mt-0.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
-                  </svg>
-                </div>
-                <div className="ml-3">
-                  <h3 className="text-sm font-medium text-blue-300">
-                    {isSignup ? 'Account Creation' : 'Demo Access'}
-                  </h3>
-                  <div className="mt-2 text-sm text-blue-200 space-y-1">
-                    {isSignup ? (
-                      <>
-                        <p><strong>Choose your role:</strong> Employee or Administrator</p>
-                        <p><strong>Note:</strong> Your role will be saved and used for permissions</p>
-                        <p><strong>Email confirmation:</strong> Check your email after signup</p>
-                      </>
-                    ) : (
-                      <>
-                        <p><strong>Demo:</strong> Use any Supabase Auth account</p>
-                        <p><strong>Note:</strong> User profile created automatically on first login</p>
-                        <p><strong>Role:</strong> Determined by signup or defaults to employee</p>
-                      </>
-                    )}
-                  </div>
-                </div>
-              </div>
-            </div>
 
             {/* Login Buttons */}
             <div className="space-y-3">
@@ -306,7 +272,7 @@ const Login = () => {
               <button
                 type="submit"
                 disabled={loading}
-                className="glass-button-primary w-full disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:bg-indigo-500/20 disabled:hover:border-indigo-400/30"
+                className="w-full bg-blue-600 hover:bg-blue-700 text-white font-medium py-2 px-4 rounded-md shadow-sm transition-colors disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:bg-blue-600"
               >
                 {loading ? (
                   <span className="flex items-center justify-center">
@@ -334,7 +300,7 @@ const Login = () => {
                     setIsSignup(!isSignup);
                     setError(''); // Clear any errors when switching
                   }}
-                  className="text-white/80 hover:text-white text-sm underline transition-colors"
+                  className="text-blue-600 hover:text-blue-800 text-sm underline transition-colors"
                 >
                   {isSignup
                     ? 'Already have an account? Sign in'
@@ -346,10 +312,10 @@ const Login = () => {
               {/* Divider */}
               <div className="relative">
                 <div className="absolute inset-0 flex items-center">
-                  <div className="w-full border-t border-white/20"></div>
+                  <div className="w-full border-t border-gray-300"></div>
                 </div>
                 <div className="relative flex justify-center text-sm">
-                  <span className="px-2 bg-transparent text-white/60">Or continue with</span>
+                  <span className="px-2 bg-transparent text-gray-500">Or continue with</span>
                 </div>
               </div>
 
@@ -358,7 +324,7 @@ const Login = () => {
                 type="button"
                 onClick={handleGoogleLogin}
                 disabled={googleLoading}
-                className="glass-card w-full px-4 py-3 flex items-center justify-center space-x-3 hover:bg-white/10 transition-all duration-200 disabled:opacity-50 disabled:cursor-not-allowed"
+                className="w-full px-4 py-3 flex items-center justify-center space-x-3 bg-white border border-gray-300 rounded-md shadow-sm hover:bg-gray-50 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
               >
                 {googleLoading ? (
                   <svg className="animate-spin h-5 w-5 text-white" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
@@ -381,7 +347,7 @@ const Login = () => {
           </form>
         </div>
       </div>
-    </GlassBackground>
+    </div>
   );
 };
 

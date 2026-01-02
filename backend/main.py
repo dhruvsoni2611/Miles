@@ -72,18 +72,30 @@ class UserResponse(BaseModel):
 class TaskBase(BaseModel):
     title: str
     description: Optional[str] = None
-    priority: str = "medium"
-    start_date: Optional[date] = None
-    deadline: Optional[datetime] = None
-    tags: Optional[List[str]] = None
+    priority: int = 1
+    difficulty_level: int = 1
+    required_skills: Optional[List[str]] = None
+    status: str = "todo"
+    assigned_to: Optional[str] = None
+    due_date: Optional[datetime] = None
     notes: Optional[str] = None
+    progress: int = 0
 
-class TaskUpdate(TaskBase):
+class TaskUpdate(BaseModel):
+    title: Optional[str] = None
+    description: Optional[str] = None
+    priority: Optional[int] = None
+    difficulty_level: Optional[int] = None
+    required_skills: Optional[List[str]] = None
     status: Optional[str] = None
+    assigned_to: Optional[str] = None
+    due_date: Optional[datetime] = None
+    notes: Optional[str] = None
+    progress: Optional[int] = None
 
 class TaskResponse(TaskBase):
     id: str
-    profile_id: str
+    created_by: str
     status: str
     progress: int
     created_at: datetime
@@ -717,18 +729,58 @@ async def get_dashboard_stats(current_user: dict = Depends(get_current_user)):
         raise HTTPException(status_code=500, detail="Failed to fetch dashboard statistics")
 
 # Tasks API
+@app.post("/api/tasks", response_model=TaskResponse)
+async def create_task(task_data: TaskBase, current_user = Depends(get_current_user)):
+    """Create a new task"""
+    try:
+        # Get current user ID
+        user_id = current_user.id
+
+        # Prepare task data for insertion
+        task_dict = task_data.dict()
+        task_dict['created_by'] = user_id
+        task_dict['assigned_to'] = task_dict.get('assigned_to') or user_id
+        # Ensure progress is set (default to 0)
+        if 'progress' not in task_dict:
+            task_dict['progress'] = 0
+
+        # Convert date objects to ISO format for Supabase
+        if task_dict.get('due_date') and isinstance(task_dict['due_date'], datetime):
+            task_dict['due_date'] = task_dict['due_date'].isoformat()
+
+        # Insert task into database
+        response = supabase_admin.table('tasks').insert(task_dict).execute()
+
+        if not response.data or len(response.data) == 0:
+            raise HTTPException(status_code=500, detail="Failed to create task")
+
+        created_task = response.data[0]
+
+        # Ensure progress field exists (fallback for databases without the field yet)
+        if 'progress' not in created_task:
+            created_task['progress'] = 0
+
+        return TaskResponse(**created_task)
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"Create task error: {e}")
+        raise HTTPException(status_code=500, detail="Failed to create task")
+
 @app.get("/api/tasks")
 async def get_tasks(
     status: Optional[str] = None,
     priority: Optional[str] = None,
     search: Optional[str] = None,
     overdue: bool = False,
-    current_user: dict = Depends(get_current_user)
+    current_user = Depends(get_current_user)
 ):
-    """Get tasks for the current admin user with optional filters"""
+    """Get tasks assigned to the current user with optional filters"""
     try:
-        profile_id = current_user['id']
-        query = supabase_admin.table('tasks').select('*').eq('created_by', profile_id)
+        # Filter tasks assigned to the current user
+        user_id = current_user.id
+        query = supabase_admin.table('tasks').select('*').eq('assigned_to', user_id)
 
         # Apply filters
         if status:
@@ -749,6 +801,11 @@ async def get_tasks(
         formatted_tasks = []
         for task in tasks:
             task_dict = dict(task)
+
+            # Ensure progress field exists (fallback for databases without the field yet)
+            if 'progress' not in task_dict:
+                task_dict['progress'] = 0
+
             if task.get('deadline') and task['deadline']:
                 try:
                     deadline_str = str(task['deadline']).replace('Z', '+00:00')
@@ -782,17 +839,22 @@ async def get_tasks(
 
 
 @app.get("/api/tasks/{task_id}", response_model=TaskResponse)
-async def get_task(task_id: str, current_user: dict = Depends(get_current_user)):
-    """Get a specific task"""
+async def get_task(task_id: str, current_user = Depends(get_current_user)):
+    """Get a specific task assigned to the current user"""
     try:
-        profile_id = current_user['id']
+        # Filter task assigned to the current user
+        user_id = current_user.id
 
-        response = supabase_admin.table('tasks').select('*').eq('id', task_id).eq('created_by', profile_id).execute()
+        response = supabase_admin.table('tasks').select('*').eq('id', task_id).eq('assigned_to', user_id).execute()
 
         if not response.data or len(response.data) == 0:
             raise HTTPException(status_code=404, detail="Task not found")
 
         task = response.data[0]
+
+        # Ensure progress field exists (fallback for databases without the field yet)
+        if 'progress' not in task:
+            task['progress'] = 0
 
         return TaskResponse(**task)
 
@@ -803,13 +865,12 @@ async def get_task(task_id: str, current_user: dict = Depends(get_current_user))
         raise HTTPException(status_code=500, detail="Failed to fetch task")
 
 @app.put("/api/tasks/{task_id}", response_model=TaskResponse)
-async def update_task(task_id: str, task_data: TaskUpdate, current_user: dict = Depends(get_current_user)):
-    """Update a task"""
+async def update_task(task_id: str, task_data: TaskUpdate, current_user = Depends(get_current_user)):
+    """Update a task assigned to the current user"""
     try:
-        profile_id = current_user['id']
-
-        # Check if task exists and belongs to user
-        existing_response = supabase_admin.table('tasks').select('id').eq('id', task_id).eq('created_by', profile_id).execute()
+        # Check if task exists and is assigned to the current user
+        user_id = current_user.id
+        existing_response = supabase_admin.table('tasks').select('id').eq('id', task_id).eq('assigned_to', user_id).execute()
 
         if not existing_response.data or len(existing_response.data) == 0:
             raise HTTPException(status_code=404, detail="Task not found")
@@ -825,12 +886,17 @@ async def update_task(task_id: str, task_data: TaskUpdate, current_user: dict = 
 
         update_dict['updated_at'] = datetime.utcnow().isoformat()
 
-        response = supabase_admin.table('tasks').update(update_dict).eq('id', task_id).eq('created_by', profile_id).execute()
+        response = supabase_admin.table('tasks').update(update_dict).eq('id', task_id).eq('assigned_to', user_id).execute()
 
         if not response.data or len(response.data) == 0:
             raise HTTPException(status_code=500, detail="Failed to update task")
 
         updated_task = response.data[0]
+
+        # Ensure progress field exists (fallback for databases without the field yet)
+        if 'progress' not in updated_task:
+            updated_task['progress'] = 0
+
         return TaskResponse(**updated_task)
 
     except HTTPException:
@@ -840,19 +906,18 @@ async def update_task(task_id: str, task_data: TaskUpdate, current_user: dict = 
         raise HTTPException(status_code=500, detail="Failed to update task")
 
 @app.delete("/api/tasks/{task_id}")
-async def delete_task(task_id: str, current_user: dict = Depends(get_current_user)):
-    """Delete a task"""
+async def delete_task(task_id: str, current_user = Depends(get_current_user)):
+    """Delete a task assigned to the current user"""
     try:
-        profile_id = current_user['id']
-
-        # Check if task exists and belongs to user
-        existing_response = supabase_admin.table('tasks').select('id').eq('id', task_id).eq('created_by', profile_id).execute()
+        # Check if task exists and is assigned to the current user
+        user_id = current_user.id
+        existing_response = supabase_admin.table('tasks').select('id').eq('id', task_id).eq('assigned_to', user_id).execute()
 
         if not existing_response.data or len(existing_response.data) == 0:
             raise HTTPException(status_code=404, detail="Task not found")
 
         # Delete task
-        response = supabase_admin.table('tasks').delete().eq('id', task_id).eq('created_by', profile_id).execute()
+        response = supabase_admin.table('tasks').delete().eq('id', task_id).eq('assigned_to', user_id).execute()
 
         return {"message": "Task deleted successfully"}
 
