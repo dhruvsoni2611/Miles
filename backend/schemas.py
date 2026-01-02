@@ -6,15 +6,17 @@ from datetime import datetime, timezone
 class UserTaskCreate(BaseModel):
     title: str = Field(..., min_length=1, max_length=255, description="Task title (1-255 characters)")
     description: Optional[str] = None
-    deadline: Optional[datetime] = None
+    project_id: Optional[str] = None  # UUID string for project reference
     priority: str = Field("medium", pattern="^(low|medium|high|urgent)$", description="Task priority level")
-    status: str = Field("assigned", pattern="^(pending|assigned|in_progress|in_review|completed|cancelled)$", description="Task status")
-    progress: int = Field(0, ge=0, le=100, description="Progress percentage (0-100)")
+    difficulty_level: int = Field(1, ge=1, le=10, description="Task difficulty (1-10)")
+    required_skills: Optional[List[str]] = []  # List of skill names
+    status: str = Field("todo", pattern="^(todo|in_progress|review|done)$", description="Task status")
+    assigned_to: Optional[str] = None  # UUID string for assigned user
+    due_date: Optional[datetime] = None  # Changed from deadline to due_date
     notes: Optional[str] = None
-    tags: Optional[List[str]] = []
 
-    @validator('deadline')
-    def deadline_must_be_future(cls, v):
+    @validator('due_date')
+    def due_date_must_be_future(cls, v):
         if v is not None:
             # Ensure both datetimes are timezone-aware for comparison
             now = datetime.now(timezone.utc)
@@ -23,5 +25,15 @@ class UserTaskCreate(BaseModel):
                 v = v.replace(tzinfo=timezone.utc)
 
             if v <= now:
-                raise ValueError('Deadline must be in the future')
+                raise ValueError('Due date must be in the future')
         return v
+
+    # Helper method to convert frontend priority string to database integer
+    def get_priority_int(self) -> int:
+        priority_map = {
+            "low": 1,
+            "medium": 2,
+            "high": 3,
+            "urgent": 4
+        }
+        return priority_map.get(self.priority, 2)  # default to medium

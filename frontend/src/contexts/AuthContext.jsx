@@ -105,53 +105,29 @@ export const AuthProvider = ({ children }) => {
 
   const login = async (email, password) => {
     try {
-      console.log('AuthContext: Attempting login for email:', email);
+      console.log('AuthContext: Attempting Supabase login for email:', email);
 
-      // Call our custom backend login endpoint
-      const response = await fetch('http://localhost:8000/api/auth/login', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          email,
-          password
-        }),
+      // Use Supabase Auth directly for proper session management
+      const { data, error } = await supabase.auth.signInWithPassword({
+        email,
+        password,
       });
 
-      if (!response.ok) {
-        const errorData = await response.json();
-        throw new Error(errorData.detail || 'Login failed');
+      if (error) {
+        console.error('AuthContext: Supabase login error:', error);
+        throw new Error(error.message || 'Login failed');
       }
 
-      const data = await response.json();
+      if (data.user && data.session) {
+        console.log('AuthContext: Supabase login successful for:', data.user.email);
 
-      if (data.user && data.access_token) {
-        console.log('AuthContext: Login successful for:', data.user.name);
-
-        const userData = {
-          id: data.user.id,
-          email: data.user.email || '',
-          name: data.user.name || email,
-          role: data.user.role,
-          is_active: data.user.is_active,
-          created_at: data.user.created_at
-        };
-
-        console.log('AuthContext: Storing user data:', userData);
-
-        // Store auth data
-        localStorage.setItem('token', data.access_token);
-        localStorage.setItem('user', JSON.stringify(userData));
-
-        setUser(userData);
-        setToken(data.access_token);
-
-        return userData;
+        // The session will be handled automatically by Supabase
+        // The onAuthStateChange listener will update our state
+        return data.user;
       }
 
-      console.error('AuthContext: Login failed - no user or token data');
-      throw new Error('Login failed - no user data received');
+      console.error('AuthContext: Login failed - no user or session data');
+      throw new Error('Login failed - no session data received');
     } catch (error) {
       console.error('AuthContext: Login error:', error);
       throw error;
@@ -187,6 +163,8 @@ export const AuthProvider = ({ children }) => {
   const ensureValidSession = async () => {
     try {
       console.log('AuthContext: Ensuring valid session...');
+
+      // First, check if we have a cached session
       const { data: { session }, error } = await supabase.auth.getSession();
 
       if (error) {
@@ -196,7 +174,6 @@ export const AuthProvider = ({ children }) => {
 
       if (!session) {
         console.log('AuthContext: No session found, user needs to login');
-        logout();
         throw new Error('No active session');
       }
 
@@ -213,27 +190,12 @@ export const AuthProvider = ({ children }) => {
 
         if (refreshError) {
           console.error('AuthContext: Token refresh failed:', refreshError);
-          logout();
           throw new Error('Token refresh failed');
         }
 
         if (refreshData.session) {
           console.log('AuthContext: Token refreshed successfully');
-          const role = refreshData.user.user_metadata?.role || 'employee';
-          const userData = {
-            id: refreshData.user.id,
-            email: refreshData.user.email,
-            name: refreshData.user.user_metadata?.name || '',
-            role: role,
-            is_active: true,
-            created_at: refreshData.user.created_at
-          };
-
-          setUser(userData);
-          setToken(refreshData.session.access_token);
-          localStorage.setItem('token', refreshData.session.access_token);
-          localStorage.setItem('user', JSON.stringify(userData));
-
+          // The onAuthStateChange listener will handle the session update
           return refreshData.session.access_token;
         }
       }

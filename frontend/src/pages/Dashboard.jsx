@@ -1,14 +1,14 @@
 import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
-import { supabase } from '../lib/supabase';
 import GlassBackground from '../components/GlassBackground';
 
 const Dashboard = () => {
   const [user, setUser] = useState(null);
   const [loading, setLoading] = useState(true);
+  const [projects, setProjects] = useState([]);
   const navigate = useNavigate();
-  const { logout } = useAuth();
+  const { logout, ensureValidSession, isAuthenticated } = useAuth();
 
   // Static hardcoded tasks data
   const tasks = [
@@ -106,16 +106,36 @@ const Dashboard = () => {
   const [newTask, setNewTask] = useState({
     title: '',
     description: '',
+    project_id: '',
     priority: 'medium',
-    start_date: '',
-    deadline: '',
-    tags: '',
+    difficulty_level: 1,
+    required_skills: '',
+    status: 'todo',
+    assigned_to: '',
+    due_date: '',
     notes: ''
   });
 
   useEffect(() => {
     checkAuth();
+    fetchProjects();
   }, []);
+
+  const fetchProjects = async () => {
+    try {
+      // For demo purposes, use hardcoded projects
+      // In production, this would fetch from: /api/projects
+      const demoProjects = [
+        { id: 'demo-project-1', name: 'Website Redesign' },
+        { id: 'demo-project-2', name: 'Mobile App Development' },
+        { id: 'demo-project-3', name: 'API Integration' },
+        { id: 'demo-project-4', name: 'Database Optimization' }
+      ];
+      setProjects(demoProjects);
+    } catch (error) {
+      console.error('Error fetching projects:', error);
+    }
+  };
 
   const checkAuth = async () => {
     try {
@@ -191,6 +211,13 @@ const Dashboard = () => {
   };
 
   const handleAddTask = () => {
+    // Check if user is authenticated
+    if (!isAuthenticated()) {
+      alert('Please login to add tasks');
+      navigate('/login');
+      return;
+    }
+
     // Check if user is admin
     if (user?.role !== 'admin') {
       alert('Only administrators can add tasks.');
@@ -202,27 +229,70 @@ const Dashboard = () => {
   const handleTaskSubmit = async (e) => {
     e.preventDefault();
 
+    // Check if user is authenticated
+    if (!isAuthenticated()) {
+      alert('Please login to create tasks');
+      navigate('/login');
+      return;
+    }
+
     try {
+      // Ensure user is authenticated and get valid token
+      let token;
+      try {
+        token = await ensureValidSession();
+      } catch (authError) {
+        console.error('Authentication error:', authError);
+        if (authError.message.includes('No active session')) {
+          alert('Your session has expired. Please login again.');
+          navigate('/login');
+          return;
+        }
+        throw new Error(`Authentication failed: ${authError.message}`);
+      }
+
       const taskData = {
-        ...newTask,
-        tags: newTask.tags ? newTask.tags.split(',').map(tag => tag.trim()).filter(tag => tag) : []
+        title: newTask.title,
+        description: newTask.description,
+        project_id: newTask.project_id || null,
+        priority: newTask.priority,
+        difficulty_level: parseInt(newTask.difficulty_level),
+        required_skills: newTask.required_skills ? newTask.required_skills.split(',').map(skill => skill.trim()).filter(skill => skill) : [],
+        status: newTask.status,
+        assigned_to: newTask.assigned_to || null,
+        due_date: newTask.due_date ? new Date(newTask.due_date).toISOString() : null,
+        notes: newTask.notes
       };
 
       console.log('Creating task with data:', taskData);
 
-      // Make actual API call to backend
+      // Make authenticated API call to backend
       const response = await fetch('http://localhost:8000/api/tasks', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          // For demo, skip auth header since backend may not require it
+          'Authorization': `Bearer ${token}`,
         },
-        body: JSON.stringify(taskData), // profile_id will be set by backend
+        body: JSON.stringify(taskData),
       });
 
       if (!response.ok) {
-        const errorData = await response.json();
-        throw new Error(errorData.detail || `Failed to create task (${response.status})`);
+        let errorMessage = `Failed to create task (${response.status})`;
+
+        try {
+          const errorData = await response.json();
+          if (errorData.detail) {
+            errorMessage = errorData.detail;
+          } else if (typeof errorData === 'object') {
+            // Handle different error response formats
+            errorMessage = JSON.stringify(errorData, null, 2);
+          }
+        } catch (parseError) {
+          // If we can't parse JSON, use the status text
+          errorMessage = `Failed to create task: ${response.status} ${response.statusText}`;
+        }
+
+        throw new Error(errorMessage);
       }
 
       const createdTask = await response.json();
@@ -232,10 +302,13 @@ const Dashboard = () => {
       setNewTask({
         title: '',
         description: '',
+        project_id: '',
         priority: 'medium',
-        start_date: '',
-        deadline: '',
-        tags: '',
+        difficulty_level: 1,
+        required_skills: '',
+        status: 'todo',
+        assigned_to: '',
+        due_date: '',
         notes: ''
       });
       setShowTaskModal(false);
@@ -654,47 +727,101 @@ const Dashboard = () => {
                           <option value="urgent">Urgent</option>
                         </select>
                       </div>
+
+                      {/* Difficulty Level */}
+                      <div>
+                        <label className="block text-sm font-medium text-white/90 mb-2">
+                          Difficulty Level (1-10)
+                        </label>
+                        <input
+                          type="number"
+                          min="1"
+                          max="10"
+                          value={newTask.difficulty_level}
+                          onChange={(e) => setNewTask(prev => ({ ...prev, difficulty_level: e.target.value }))}
+                          className="glass-input w-full"
+                        />
+                      </div>
                     </div>
 
                     <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                      {/* Start Date */}
+                      {/* Project */}
                       <div>
                         <label className="block text-sm font-medium text-white/90 mb-2">
-                          Start Date
+                          Project (Optional)
+                        </label>
+                        <select
+                          value={newTask.project_id}
+                          onChange={(e) => setNewTask(prev => ({ ...prev, project_id: e.target.value }))}
+                          className="glass-input w-full"
+                        >
+                          <option value="">Select a project</option>
+                          {projects.map((project) => (
+                            <option key={project.id} value={project.id}>
+                              {project.name}
+                            </option>
+                          ))}
+                        </select>
+                      </div>
+
+                      {/* Status */}
+                      <div>
+                        <label className="block text-sm font-medium text-white/90 mb-2">
+                          Status
+                        </label>
+                        <select
+                          value={newTask.status}
+                          onChange={(e) => setNewTask(prev => ({ ...prev, status: e.target.value }))}
+                          className="glass-input w-full"
+                        >
+                          <option value="todo">To Do</option>
+                          <option value="in_progress">In Progress</option>
+                          <option value="review">Review</option>
+                          <option value="done">Done</option>
+                        </select>
+                      </div>
+                    </div>
+
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                      {/* Assigned To */}
+                      <div>
+                        <label className="block text-sm font-medium text-white/90 mb-2">
+                          Assigned To (User ID)
                         </label>
                         <input
-                          type="date"
-                          value={newTask.start_date}
-                          onChange={(e) => setNewTask(prev => ({ ...prev, start_date: e.target.value }))}
+                          type="text"
+                          value={newTask.assigned_to}
+                          onChange={(e) => setNewTask(prev => ({ ...prev, assigned_to: e.target.value }))}
                           className="glass-input w-full"
+                          placeholder="UUID of assigned user"
                         />
                       </div>
 
-                      {/* Deadline */}
+                      {/* Due Date */}
                       <div>
                         <label className="block text-sm font-medium text-white/90 mb-2">
-                          Deadline
+                          Due Date
                         </label>
                         <input
                           type="date"
-                          value={newTask.deadline}
-                          onChange={(e) => setNewTask(prev => ({ ...prev, deadline: e.target.value }))}
+                          value={newTask.due_date}
+                          onChange={(e) => setNewTask(prev => ({ ...prev, due_date: e.target.value }))}
                           className="glass-input w-full"
                         />
                       </div>
                     </div>
 
-                    {/* Tags */}
+                    {/* Required Skills */}
                     <div>
                       <label className="block text-sm font-medium text-white/90 mb-2">
-                        Tags (comma-separated)
+                        Required Skills (comma-separated)
                       </label>
                       <input
                         type="text"
-                        value={newTask.tags}
-                        onChange={(e) => setNewTask(prev => ({ ...prev, tags: e.target.value }))}
+                        value={newTask.required_skills}
+                        onChange={(e) => setNewTask(prev => ({ ...prev, required_skills: e.target.value }))}
                         className="glass-input w-full"
-                        placeholder="design, frontend, urgent"
+                        placeholder="JavaScript, React, Python"
                       />
                     </div>
 

@@ -18,9 +18,25 @@ SUPABASE_ANON_KEY = os.getenv("SUPABASE_ANON_KEY")
 SUPABASE_SERVICE_ROLE_KEY = os.getenv("SUPABASE_SERVICE_ROLE_KEY")
 SUPABASE_JWT_SECRET = os.getenv("SUPABASE_JWT_SECRET")
 
-# Initialize Supabase clients
-supabase: Client = create_client(SUPABASE_URL, SUPABASE_ANON_KEY)
-supabase_admin: Client = create_client(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY)
+# Initialize Supabase clients (only if credentials are available)
+supabase: Client = None
+supabase_admin: Client = None
+
+if SUPABASE_URL and SUPABASE_ANON_KEY:
+    try:
+        supabase = create_client(SUPABASE_URL, SUPABASE_ANON_KEY)
+        print(f"✅ Supabase client initialized with URL: {SUPABASE_URL}")
+    except Exception as e:
+        print(f"❌ Failed to initialize Supabase client: {e}")
+        supabase = None
+
+if SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY:
+    try:
+        supabase_admin = create_client(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY)
+        print("✅ Supabase admin client initialized")
+    except Exception as e:
+        print(f"❌ Failed to initialize Supabase admin client: {e}")
+        supabase_admin = None
 
 # JWT Configuration (for custom endpoints if needed)
 SECRET_KEY = SUPABASE_JWT_SECRET or os.getenv("SECRET_KEY", "your-secret-key-change-in-production")

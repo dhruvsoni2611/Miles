@@ -75,6 +75,7 @@ CREATE TABLE IF NOT EXISTS public.tasks (
   assigned_to UUID REFERENCES public.user_miles(id),
   created_by UUID REFERENCES public.user_miles(id),
   due_date TIMESTAMPTZ,
+  notes TEXT,
 
   created_at TIMESTAMPTZ DEFAULT NOW(),
   updated_at TIMESTAMPTZ DEFAULT NOW()

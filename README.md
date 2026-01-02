@@ -138,14 +138,34 @@ Before running this application, make sure you have the following installed:
    cd frontend
    npm run dev
    ```
-   🌐 Frontend App: http://localhost:3000
+   🌐 Frontend App: http://localhost:5173
 
 ### 🧪 Testing the Setup
 
 - **API Health Check:** http://localhost:8000/api/health
 - **API Documentation:** http://localhost:8000/docs (Swagger UI)
 - **Alternative Docs:** http://localhost:8000/redoc
-- **Frontend Application:** http://localhost:3000
+- **Frontend Application:** http://localhost:5173
+
+### 🧪 Testing Task Creation
+
+After setting up Supabase and running both frontend/backend:
+
+1. **Test API directly:**
+   ```bash
+   cd backend
+   python test_task_creation.py
+   ```
+
+2. **Test via Frontend:**
+   - Open http://localhost:5173
+   - Login as admin
+   - Click "Add Task"
+   - Fill form and submit
+
+3. **Verify in Database:**
+   - Check Supabase dashboard
+   - Query the `tasks` table
 
 ## ⚙️ Configuration
 
