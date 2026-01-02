@@ -1,9 +1,9 @@
 import { BrowserRouter as Router, Routes, Route, Navigate } from 'react-router-dom'
 import { AuthProvider, useAuth } from './contexts/AuthContext'
 import Login from './pages/Login'
-import AdminDashboard from './pages/AdminDashboard'
-import EmployeeDashboard from './pages/EmployeeDashboard'
+import Dashboard from './pages/Dashboard'
 import Home from './pages/Home'
+import AuthCallback from './pages/AuthCallback'
 import './App.css'
 
 // Protected Route Component
@@ -12,29 +12,29 @@ const ProtectedRoute = ({ children, requiredRole }) => {
 
   if (loading) {
     return (
-      <div className="min-h-screen bg-gray-100 flex items-center justify-center">
-        <div className="text-center">
-          <div className="animate-spin rounded-full h-32 w-32 border-b-2 border-indigo-600 mx-auto"></div>
-          <p className="mt-4 text-gray-600">Loading...</p>
+      <div className="min-h-screen bg-gradient-to-br from-indigo-900 via-purple-900 to-pink-900 flex items-center justify-center">
+        <div className="glass-card p-8 text-center floating-animation">
+          <div className="animate-spin rounded-full h-16 w-16 border-2 border-white/30 border-t-white mx-auto"></div>
+          <p className="mt-6 text-white/80 font-medium">Loading...</p>
         </div>
       </div>
     );
   }
 
+  // First check: Must be authenticated
   if (!isAuthenticated()) {
+    console.log('ProtectedRoute: User not authenticated, redirecting to login');
     return <Navigate to="/login" replace />;
   }
 
+  // Second check: Must have required role if specified
   if (requiredRole && !hasRole(requiredRole)) {
-    // Redirect to appropriate dashboard based on user role
-    const user = JSON.parse(localStorage.getItem('user') || '{}');
-    if (user.role === 'admin') {
-      return <Navigate to="/admin/dashboard" replace />;
-    } else {
-      return <Navigate to="/employee/dashboard" replace />;
-    }
+    console.log(`ProtectedRoute: User does not have required role '${requiredRole}', redirecting to login`);
+    // If user doesn't have the required role, redirect to login (don't allow access to any dashboard)
+    return <Navigate to="/login" replace />;
   }
 
+  console.log(`ProtectedRoute: Access granted for role '${requiredRole}'`);
   return children;
 };
 
@@ -46,30 +46,11 @@ const AppRouter = () => {
     <div className="App">
       <Routes>
         {/* Public Routes */}
-        <Route path="/" element={<Home />} />
-        <Route path="/login" element={
-          isAuthenticated() ? (
-            user?.role === 'admin' ?
-              <Navigate to="/admin/dashboard" replace /> :
-              <Navigate to="/employee/dashboard" replace />
-          ) : (
-            <Login />
-          )
-        } />
+        <Route path="/" element={<Dashboard />} />
+        <Route path="/login" element={<Login />} />
+        <Route path="/home" element={<Home />} />
+        <Route path="/auth/callback" element={<AuthCallback />} />
 
-        {/* Protected Admin Routes */}
-        <Route path="/admin/dashboard" element={
-          <ProtectedRoute requiredRole="admin">
-            <AdminDashboard />
-          </ProtectedRoute>
-        } />
-
-        {/* Protected Employee Routes */}
-        <Route path="/employee/dashboard" element={
-          <ProtectedRoute requiredRole="employee">
-            <EmployeeDashboard />
-          </ProtectedRoute>
-        } />
 
         {/* Catch all route */}
         <Route path="*" element={<Navigate to="/" replace />} />

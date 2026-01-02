@@ -100,3 +100,5 @@ playwright/.cache/
 .firebase/
 firebase-debug.log
 firestore-debug.log
+
+
