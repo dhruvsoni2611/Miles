@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Test script to verify Supabase connection and task_admins table
+Test script to verify Supabase connection and Miles schema tables
 """
 import os
 from dotenv import load_dotenv
@@ -10,45 +10,63 @@ from supabase import create_client, Client
 load_dotenv()
 
 def test_supabase_connection():
-    """Test Supabase connection and query task_admins table"""
+    """Test Supabase connection and query Miles schema tables"""
     try:
         # Get environment variables
         supabase_url = os.getenv("SUPABASE_URL")
-        supabase_key = os.getenv("SUPABASE_ANON_KEY")
+        supabase_service_key = os.getenv("SUPABASE_SERVICE_ROLE_KEY")
 
-        if not supabase_url or not supabase_key:
+        print("Environment variables loaded:")
+        print(f"SUPABASE_URL: {'[OK]' if supabase_url else '[MISSING]'}")
+        print(f"SUPABASE_SERVICE_ROLE_KEY: {'[OK]' if supabase_service_key else '[MISSING]'}")
+
+        if not supabase_url or not supabase_service_key:
             print("ERROR: Missing environment variables")
-            print("Please ensure SUPABASE_URL and SUPABASE_ANON_KEY are set in .env file")
+            print("Please ensure SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY are set in .env file")
             return False
 
-        print("Connecting to Supabase...")
-        supabase: Client = create_client(supabase_url, supabase_key)
+        print("\nConnecting to Supabase...")
+        supabase: Client = create_client(supabase_url, supabase_service_key)
 
-        print("Querying task_admins table...")
-        response = supabase.table('task_admins').select('*').execute()
+        print("[SUCCESS] Supabase client created successfully")
 
-        if response.data:
-            print(f"SUCCESS: Retrieved {len(response.data)} users from task_admins table")
-            for user in response.data:
-                print(f"  - {user['username']} ({user['role']}) - {'Active' if user['is_active'] else 'Inactive'}")
-            return True
-        else:
-            print("WARNING: No data found in task_admins table")
-            print("Please ensure the table exists and has data")
+        # Test connection by checking tables
+        tables_to_check = ['user_miles', 'user_reporting', 'tasks', 'projects']
+        print("\nChecking database tables:")
+
+        all_tables_exist = True
+        for table in tables_to_check:
+            try:
+                response = supabase.table(table).select('*').limit(1).execute()
+                has_data = len(response.data) > 0 if response.data else False
+                print(f"[OK] {table}: exists, has_data={has_data}")
+            except Exception as e:
+                print(f"[ERROR] {table}: {str(e)}")
+                all_tables_exist = False
+
+        if not all_tables_exist:
+            print("\n[WARNING] Some tables are missing. Please run the schema.sql in Supabase SQL Editor.")
             return False
+
+        print("\n[SUCCESS] Database connection and schema verification completed!")
+        return True
 
     except Exception as e:
-        print(f"ERROR: Failed to connect to Supabase: {e}")
+        print(f"[ERROR] Failed to connect to Supabase: {e}")
         return False
 
 if __name__ == "__main__":
-    print("Testing Supabase connection and task_admins table...")
-    print("=" * 50)
+    print("Testing Supabase connection and Miles schema...")
+    print("=" * 60)
 
     success = test_supabase_connection()
 
-    print("=" * 50)
+    print("=" * 60)
     if success:
-        print("Test completed successfully!")
+        print("[SUCCESS] All tests passed! Ready to use Supabase connection.")
     else:
-        print("Test failed. Please check your configuration.")
+        print("[FAILED] Test failed. Please check your configuration.")
+        print("\nTroubleshooting:")
+        print("1. Verify .env file has correct Supabase credentials")
+        print("2. Ensure schema.sql has been run in Supabase SQL Editor")
+        print("3. Check Supabase project is active and accessible")

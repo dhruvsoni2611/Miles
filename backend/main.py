@@ -25,17 +25,17 @@ supabase_admin: Client = None
 if SUPABASE_URL and SUPABASE_ANON_KEY:
     try:
         supabase = create_client(SUPABASE_URL, SUPABASE_ANON_KEY)
-        print(f"✅ Supabase client initialized with URL: {SUPABASE_URL}")
+        print(f"[SUCCESS] Supabase client initialized with URL: {SUPABASE_URL}")
     except Exception as e:
-        print(f"❌ Failed to initialize Supabase client: {e}")
+        print(f"[ERROR] Failed to initialize Supabase client: {e}")
         supabase = None
 
 if SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY:
     try:
         supabase_admin = create_client(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY)
-        print("✅ Supabase admin client initialized")
+        print("[SUCCESS] Supabase admin client initialized")
     except Exception as e:
-        print(f"❌ Failed to initialize Supabase admin client: {e}")
+        print(f"[ERROR] Failed to initialize Supabase admin client: {e}")
         supabase_admin = None
 
 # JWT Configuration (for custom endpoints if needed)
@@ -150,7 +150,7 @@ def get_current_user_from_token(token: str):
             user = user_response.user
 
             # Query the user_miles table to get additional profile details
-            profile_response = supabase.table('user_miles').select('*').eq('id', user.id).execute()
+            profile_response = supabase.table('user_miles').select('*').eq('auth_id', user.id).execute()
 
             if profile_response.data and len(profile_response.data) > 0:
                 user_profile = profile_response.data[0]
@@ -179,7 +179,7 @@ def get_user_role(user_id: str):
     """Get user role from user_miles table"""
     try:
         # Query the user_miles table for the user's role
-        response = supabase.table('user_miles').select('role').eq('id', user_id).execute()
+        response = supabase.table('user_miles').select('role').eq('auth_id', user_id).execute()
 
         if response.data and len(response.data) > 0:
             return response.data[0].get('role', 'employee')
@@ -508,7 +508,7 @@ async def login(login_data: LoginRequest):
         session = auth_response.session
 
         # 2. Check if user exists in user_miles table
-        profile_response = supabase.table('user_miles').select('*').eq('id', user.id).execute()
+        profile_response = supabase.table('user_miles').select('*').eq('auth_id', user.id).execute()
 
         if not profile_response.data or len(profile_response.data) == 0:
             # 3. User exists in Supabase Auth but not in user_miles table
@@ -521,7 +521,7 @@ async def login(login_data: LoginRequest):
 
                 # Insert new user profile using service role (bypasses RLS)
                 supabase_admin.table('user_miles').insert({
-                    'id': user.id,
+                    'auth_id': user.id,
                     'email': user.email,
                     'name': user.user_metadata.get('name', user.email.split('@')[0]) if user.user_metadata else user.email.split('@')[0],
                     'role': user_role_from_metadata,  # Use role from signup
@@ -538,7 +538,7 @@ async def login(login_data: LoginRequest):
                 if 'duplicate key' in error_msg or 'unique constraint' in error_msg or 'already exists' in error_msg:
                     print(f"✅ User profile already exists (caught duplicate error): {user.email}")
                     # Fetch the existing profile
-                    existing_response = supabase_admin.table('user_miles').select('*').eq('id', user.id).execute()
+                    existing_response = supabase_admin.table('user_miles').select('*').eq('auth_id', user.id).execute()
                     if existing_response.data and len(existing_response.data) > 0:
                         user_profile = existing_response.data[0]
                         user_role = user_profile['role']

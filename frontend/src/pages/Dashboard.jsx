@@ -18,6 +18,13 @@ const Dashboard = () => {
   const [showTaskModal, setShowTaskModal] = useState(false);
   const [showEmployeeModal, setShowEmployeeModal] = useState(false);
 
+  // New employee form
+  const [newEmployee, setNewEmployee] = useState({
+    email: '',
+    name: '',
+    profile_picture: ''
+  });
+
   // New task form
   const [newTask, setNewTask] = useState({
     title: '',
@@ -195,55 +202,27 @@ const Dashboard = () => {
 
   const checkAuth = async () => {
     try {
-      // For demo purposes, skip authentication and use mock admin user
-      // This allows the dashboard to load immediately without Supabase setup
-      console.log('Dashboard: Running in demo mode');
-
-      setUser({
-        id: 'demo-admin-id',
-        email: 'admin@workvillage.ai',
-        name: 'Demo Administrator',
-        role: 'admin'
-      });
-
-      /*
-      // Production authentication code (uncomment when Supabase is configured):
-
-      const { data: { session }, error: sessionError } = await supabase.auth.getSession();
-
-      if (sessionError || !session) {
-        console.log('Dashboard: No valid Supabase session, redirecting to login');
+      // Check if user is authenticated via AuthContext
+      if (!user) {
+        console.log('Dashboard: No authenticated user, redirecting to login');
         navigate('/login');
         return;
       }
 
-      // Check if user exists in task_admins table and get their role
-      const { data: profile, error: profileError } = await supabase
-        .from('task_admins')
-        .select('*')
-        .eq('id', session.user.id)
-        .single();
-
-      if (profileError || !profile) {
-        console.log('Dashboard: User not found in task_admins table');
-        alert('Your account is not authorized to access the dashboard. Please contact an administrator.');
+      // Check user role - allow managers and admins to access dashboard
+      if (user.role !== 'manager' && user.role !== 'admin') {
+        console.log('Dashboard: User does not have required role (manager/admin)');
+        alert('Access denied. Only managers and administrators can access the dashboard.');
         navigate('/login');
         return;
       }
 
-      if (profile.role !== 'admin') {
-        console.log('Dashboard: User is not admin');
-        alert('Only administrators can access the dashboard.');
-        navigate('/login');
-        return;
-      }
-
-      setUser(profile);
-      */
+      console.log('Dashboard: Authentication successful for user:', user.email, 'role:', user.role);
 
     } catch (error) {
       console.error('Dashboard: Auth check error:', error);
-      // In demo mode, don't redirect on error
+      alert('Authentication failed. Please login again.');
+      navigate('/login');
     } finally {
       setLoading(false);
     }
@@ -280,6 +259,23 @@ const Dashboard = () => {
       return;
     }
     setShowTaskModal(true);
+  };
+
+  const handleAddEmployee = () => {
+    // Check if user is authenticated
+    if (!isAuthenticated()) {
+      alert('Please login to add employees');
+      navigate('/login');
+      return;
+    }
+
+    // Check if user is manager or admin
+    if (user?.role !== 'manager' && user?.role !== 'admin') {
+      alert('Only managers and administrators can add employees.');
+      return;
+    }
+
+    setShowEmployeeModal(true);
   };
 
   const handleTaskSubmit = async (e) => {
@@ -377,6 +373,86 @@ const Dashboard = () => {
     }
   };
 
+  const handleEmployeeSubmit = async (e) => {
+    e.preventDefault();
+
+    // Check if user is authenticated
+    if (!isAuthenticated()) {
+      alert('Please login to create employees');
+      navigate('/login');
+      return;
+    }
+
+    try {
+      // Ensure user is authenticated and get valid token
+      let token;
+      try {
+        token = await ensureValidSession();
+      } catch (authError) {
+        console.error('Authentication error:', authError);
+        if (authError.message.includes('No active session')) {
+          alert('Your session has expired. Please login again.');
+          navigate('/login');
+          return;
+        }
+        throw new Error(`Authentication failed: ${authError.message}`);
+      }
+
+      const employeeData = {
+        email: newEmployee.email,
+        name: newEmployee.name,
+        profile_picture: newEmployee.profile_picture || null
+      };
+
+      console.log('Creating employee with data:', employeeData);
+
+      // Make authenticated API call to backend
+      const response = await fetch('http://localhost:8000/api/employees', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`
+        },
+        body: JSON.stringify(employeeData),
+      });
+
+      if (!response.ok) {
+        let errorMessage = `Failed to create employee (${response.status})`;
+
+        try {
+          const errorData = await response.json();
+          if (errorData.detail) {
+            errorMessage = errorData.detail;
+          } else if (typeof errorData === 'object') {
+            errorMessage = JSON.stringify(errorData, null, 2);
+          }
+        } catch (parseError) {
+          errorMessage = `Failed to create employee: ${response.status} ${response.statusText}`;
+        }
+
+        throw new Error(errorMessage);
+      }
+
+      const createdEmployee = await response.json();
+      console.log('Employee created successfully:', createdEmployee);
+
+      // Reset form and close modal
+      setNewEmployee({
+        email: '',
+        name: '',
+        profile_picture: ''
+      });
+      setShowEmployeeModal(false);
+
+      // Show success message
+      alert('Employee created successfully! Check console for employee data.');
+
+    } catch (error) {
+      console.error('Error creating employee:', error);
+      alert(`Failed to create employee: ${error.message}`);
+    }
+  };
+
 
 
   // Group tasks by status
@@ -453,7 +529,7 @@ const Dashboard = () => {
                 </button>
 
                 <button
-                  onClick={() => alert('Add Employee functionality will be implemented')}
+                  onClick={handleAddEmployee}
                   className="px-4 py-2 bg-green-600 hover:bg-green-700 rounded-lg text-white transition-colors flex items-center space-x-2 font-medium"
                 >
                   <span>👥</span>
@@ -487,7 +563,7 @@ const Dashboard = () => {
               </button>
 
               <button
-                onClick={() => alert('Add Employee functionality will be implemented')}
+                onClick={handleAddEmployee}
                 className="px-6 py-3 bg-green-600 hover:bg-green-700 rounded-lg text-white transition-colors flex items-center space-x-2 font-medium shadow-sm"
               >
                 <span>👥</span>
@@ -1124,6 +1200,133 @@ const Dashboard = () => {
                             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 6v6m0 0v6m0-6h6m-6 0H6" />
                           </svg>
                           <span>Create Task</span>
+                        </span>
+                      </button>
+                    </div>
+                  </form>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* Employee Modal */}
+          {showEmployeeModal && (
+            <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+              <div className="bg-white w-full max-w-2xl max-h-[95vh] overflow-hidden rounded-2xl shadow-2xl">
+                {/* Header */}
+                <div className="bg-gradient-to-r from-green-600 to-blue-600 px-6 py-4">
+                  <div className="flex justify-between items-center">
+                    <div className="flex items-center space-x-3">
+                      <div className="w-10 h-10 bg-white/20 rounded-full flex items-center justify-center">
+                        <svg className="w-6 h-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4.354a4 4 0 110 5.292M15 21H3v-1a6 6 0 0112 0v1zm0 0h6v-1a6 6 0 00-9-5.197m13.5-9a2.5 2.5 0 11-5 0 2.5 2.5 0 015 0z" />
+                        </svg>
+                      </div>
+                      <div>
+                        <h2 className="text-xl font-bold text-white">Add New Employee</h2>
+                        <p className="text-green-100 text-sm">Create a new team member</p>
+                      </div>
+                    </div>
+                    <button
+                      onClick={() => setShowEmployeeModal(false)}
+                      className="w-8 h-8 bg-white/20 hover:bg-white/30 rounded-full flex items-center justify-center text-white transition-colors"
+                    >
+                      ✕
+                    </button>
+                  </div>
+                </div>
+
+                {/* Form Content */}
+                <div className="overflow-y-auto max-h-[calc(95vh-120px)]">
+                  <form onSubmit={handleEmployeeSubmit} className="p-6 space-y-6">
+                    {/* Employee Information Card */}
+                    <div className="bg-gray-50 rounded-xl p-6 border border-gray-200">
+                      <div className="flex items-center space-x-2 mb-4">
+                        <svg className="w-5 h-5 text-green-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z" />
+                        </svg>
+                        <h3 className="text-lg font-semibold text-gray-900">Employee Information</h3>
+                      </div>
+
+                      {/* Email */}
+                      <div className="mb-4">
+                        <label className="block text-sm font-medium text-gray-700 mb-2">
+                          Email Address <span className="text-red-500">*</span>
+                        </label>
+                        <div className="relative">
+                          <input
+                            type="email"
+                            required
+                            value={newEmployee.email}
+                            onChange={(e) => setNewEmployee(prev => ({ ...prev, email: e.target.value }))}
+                            className="w-full px-4 py-3 pl-10 bg-white border border-black rounded-lg focus:ring-2 focus:ring-green-500 focus:border-green-500 text-black transition-colors"
+                            placeholder="employee@company.com"
+                          />
+                          <svg className="w-5 h-5 text-gray-400 absolute left-3 top-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 8l7.89 5.26a2 2 0 002.22 0L21 8M5 19h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" />
+                          </svg>
+                        </div>
+                      </div>
+
+                      {/* Name */}
+                      <div className="mb-4">
+                        <label className="block text-sm font-medium text-gray-700 mb-2">
+                          Full Name <span className="text-red-500">*</span>
+                        </label>
+                        <div className="relative">
+                          <input
+                            type="text"
+                            required
+                            value={newEmployee.name}
+                            onChange={(e) => setNewEmployee(prev => ({ ...prev, name: e.target.value }))}
+                            className="w-full px-4 py-3 pl-10 bg-white border border-black rounded-lg focus:ring-2 focus:ring-green-500 focus:border-green-500 text-black transition-colors"
+                            placeholder="John Doe"
+                          />
+                          <svg className="w-5 h-5 text-gray-400 absolute left-3 top-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z" />
+                          </svg>
+                        </div>
+                      </div>
+
+                      {/* Profile Picture URL */}
+                      <div>
+                        <label className="block text-sm font-medium text-gray-700 mb-2">
+                          Profile Picture URL
+                        </label>
+                        <div className="relative">
+                          <input
+                            type="url"
+                            value={newEmployee.profile_picture}
+                            onChange={(e) => setNewEmployee(prev => ({ ...prev, profile_picture: e.target.value }))}
+                            className="w-full px-4 py-3 pl-10 bg-white border border-black rounded-lg focus:ring-2 focus:ring-green-500 focus:border-green-500 text-black transition-colors"
+                            placeholder="https://example.com/profile.jpg"
+                          />
+                          <svg className="w-5 h-5 text-gray-400 absolute left-3 top-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z" />
+                          </svg>
+                        </div>
+                        <p className="text-xs text-gray-500 mt-1">Optional: Leave empty to use default profile picture</p>
+                      </div>
+                    </div>
+
+                    {/* Action Buttons */}
+                    <div className="flex justify-end space-x-4 pt-6 border-t border-gray-200">
+                      <button
+                        type="button"
+                        onClick={() => setShowEmployeeModal(false)}
+                        className="px-6 py-3 bg-gray-100 hover:bg-gray-200 text-gray-700 font-medium rounded-lg transition-colors duration-200"
+                      >
+                        Cancel
+                      </button>
+                      <button
+                        type="submit"
+                        className="px-8 py-3 bg-gradient-to-r from-green-600 to-blue-600 hover:from-green-700 hover:to-blue-700 text-white font-medium rounded-lg shadow-lg hover:shadow-xl transition-all duration-200 transform hover:-translate-y-0.5"
+                      >
+                        <span className="flex items-center space-x-2">
+                          <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M18 9v3m0 0v3m0-3h3m-3 0h-3m-2-5a4 4 0 11-8 0 4 4 0 018 0zM3 20a6 6 0 0112 0v1H3v-1z" />
+                          </svg>
+                          <span>Add Employee</span>
                         </span>
                       </button>
                     </div>

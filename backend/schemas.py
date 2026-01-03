@@ -37,3 +37,17 @@ class UserTaskCreate(BaseModel):
             "urgent": 4
         }
         return priority_map.get(self.priority, 2)  # default to medium
+
+
+# Employee Creation Schema
+class EmployeeCreate(BaseModel):
+    email: str = Field(..., min_length=5, max_length=255, description="Employee email address")
+    name: str = Field(..., min_length=1, max_length=255, description="Employee full name")
+    profile_picture: Optional[str] = Field(None, description="Profile picture URL")
+
+    @validator('email')
+    def email_must_be_valid(cls, v):
+        import re
+        if not re.match(r'^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$', v):
+            raise ValueError('Invalid email format')
+        return v.lower()  # normalize to lowercase

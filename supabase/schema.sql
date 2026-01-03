@@ -8,7 +8,7 @@ CREATE TYPE IF NOT EXISTS user_role AS ENUM ('employee', 'manager', 'admin');
 -- 2. USER_MILES (formerly public.users)
 -- =====================================================
 CREATE TABLE IF NOT EXISTS public.user_miles (
-  id UUID PRIMARY KEY REFERENCES auth.users(id) ON DELETE CASCADE,
+  auth_id UUID PRIMARY KEY REFERENCES auth.users(id) ON DELETE CASCADE,
   email TEXT UNIQUE NOT NULL,
   name TEXT NOT NULL,
   role user_role DEFAULT 'employee' NOT NULL,
@@ -29,11 +29,11 @@ CREATE TABLE IF NOT EXISTS public.user_miles (
 CREATE TABLE IF NOT EXISTS public.user_reporting (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
 
-  employee_id UUID NOT NULL REFERENCES public.user_miles(id) ON DELETE CASCADE,
-  manager_id  UUID NOT NULL REFERENCES public.user_miles(id) ON DELETE CASCADE,
+  employee_id UUID NOT NULL REFERENCES public.user_miles(auth_id) ON DELETE CASCADE,
+  manager_id  UUID NOT NULL REFERENCES public.user_miles(auth_id) ON DELETE CASCADE,
 
   assigned_at TIMESTAMPTZ DEFAULT NOW(),
-  assigned_by UUID REFERENCES public.user_miles(id),
+  assigned_by UUID REFERENCES public.user_miles(auth_id),
 
   UNIQUE (employee_id),
   CHECK (employee_id <> manager_id)
@@ -47,7 +47,7 @@ CREATE TABLE IF NOT EXISTS public.projects (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   name TEXT NOT NULL,
   description TEXT,
-  created_by UUID REFERENCES public.user_miles(id),
+  created_by UUID REFERENCES public.user_miles(auth_id),
   deadline DATE,
   status TEXT DEFAULT 'active'
     CHECK (status IN ('active', 'archived', 'paused')),
@@ -72,8 +72,8 @@ CREATE TABLE IF NOT EXISTS public.tasks (
   status TEXT DEFAULT 'todo'
     CHECK (status IN ('todo', 'in_progress', 'review', 'done')),
 
-  assigned_to UUID REFERENCES public.user_miles(id),
-  created_by UUID REFERENCES public.user_miles(id),
+  assigned_to UUID REFERENCES public.user_miles(auth_id),
+  created_by UUID REFERENCES public.user_miles(auth_id),
   due_date TIMESTAMPTZ,
   notes TEXT,
 
@@ -91,8 +91,8 @@ CREATE TABLE IF NOT EXISTS public.assignments (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
 
   task_id UUID REFERENCES public.tasks(id),
-  user_id UUID REFERENCES public.user_miles(id),
-  assigned_by UUID REFERENCES public.user_miles(id),
+  user_id UUID REFERENCES public.user_miles(auth_id),
+  assigned_by UUID REFERENCES public.user_miles(auth_id),
 
   assigned_at TIMESTAMPTZ DEFAULT NOW(),
   completed_at TIMESTAMPTZ,
@@ -119,7 +119,7 @@ CREATE TABLE IF NOT EXISTS public.skills (
 -- =====================================================
 CREATE TABLE IF NOT EXISTS public.user_skills (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  user_id UUID REFERENCES public.user_miles(id) ON DELETE CASCADE,
+  user_id UUID REFERENCES public.user_miles(auth_id) ON DELETE CASCADE,
   skill_id UUID REFERENCES public.skills(id) ON DELETE CASCADE,
 
   proficiency INT CHECK (proficiency BETWEEN 1 AND 10),
@@ -175,11 +175,11 @@ BEGIN
       assigned_by
     )
     SELECT
-      NEW.id,
+      NEW.auth_id,
       auth.uid(),
       auth.uid()
     FROM public.user_miles
-    WHERE id = auth.uid()
+    WHERE auth_id = auth.uid()
       AND role = 'manager';
   END IF;
 
@@ -217,14 +217,14 @@ USING (true);
 
 CREATE POLICY "Update own profile"
 ON public.user_miles FOR UPDATE
-USING (auth.uid() = id);
+USING (auth.uid() = auth_id);
 
 CREATE POLICY "Managers create employees"
 ON public.user_miles FOR INSERT
 WITH CHECK (
   EXISTS (
     SELECT 1 FROM public.user_miles
-    WHERE id = auth.uid()
+    WHERE auth_id = auth.uid()
       AND role IN ('manager', 'admin')
   )
 );
@@ -239,7 +239,7 @@ ON public.projects FOR ALL
 USING (
   EXISTS (
     SELECT 1 FROM public.user_miles
-    WHERE id = auth.uid()
+    WHERE auth_id = auth.uid()
       AND role IN ('manager', 'admin')
   )
 );
@@ -254,7 +254,7 @@ ON public.tasks FOR ALL
 USING (
   EXISTS (
     SELECT 1 FROM public.user_miles
-    WHERE id = auth.uid()
+    WHERE auth_id = auth.uid()
       AND role IN ('manager', 'admin')
   )
 );
@@ -285,7 +285,7 @@ ON public.user_reporting FOR ALL
 USING (
   EXISTS (
     SELECT 1 FROM public.user_miles
-    WHERE id = auth.uid()
+    WHERE auth_id = auth.uid()
       AND role = 'admin'
   )
 );
