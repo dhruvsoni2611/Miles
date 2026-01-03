@@ -75,3 +75,4 @@ After creating the user:
 **The user MUST exist in Supabase Auth first** before you can login. The SQL insert only creates the profile data - the authentication happens through Supabase Auth.
 
 **Create the user through the Supabase dashboard Auth → Users section first!** 🎯
+

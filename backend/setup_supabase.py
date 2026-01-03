@@ -116,3 +116,4 @@ if __name__ == "__main__":
         os.chdir(backend_dir)
 
     setup_supabase_credentials()
+

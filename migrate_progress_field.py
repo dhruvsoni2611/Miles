@@ -72,3 +72,4 @@ if __name__ == "__main__":
         print("📝 Your tasks table now has the progress field.")
     else:
         print("💥 Migration failed. Please add the progress field manually.")
+

@@ -32,16 +32,6 @@ const Dashboard = () => {
     notes: ''
   });
 
-  // Helper function to convert priority strings to integers
-  const convertPriorityToInt = (priority) => {
-    switch (priority) {
-      case 'low': return 1;
-      case 'medium': return 2;
-      case 'high': return 3;
-      case 'urgent': return 4;
-      default: return 2; // default to medium
-    }
-  };
 
   // Fetch tasks from API
   const fetchTasks = async () => {
@@ -320,7 +310,7 @@ const Dashboard = () => {
       const taskData = {
         title: newTask.title,
         description: newTask.description,
-        priority: convertPriorityToInt(newTask.priority),
+        priority: newTask.priority, // Send as string, backend converts to int
         difficulty_level: parseInt(newTask.difficulty_level),
         required_skills: newTask.required_skills ? newTask.required_skills.split(',').map(skill => skill.trim()).filter(skill => skill) : [],
         status: newTask.status,
@@ -393,8 +383,8 @@ const Dashboard = () => {
   const tasksByStatus = {
     assigned: tasks.filter(task => task.status === 'assigned' || task.status === 'todo'),
     in_progress: tasks.filter(task => task.status === 'in_progress'),
-    in_review: tasks.filter(task => task.status === 'in_review'),
-    completed: tasks.filter(task => task.status === 'completed'),
+    in_review: tasks.filter(task => task.status === 'review'),
+    completed: tasks.filter(task => task.status === 'completed' || task.status === 'done'),
     overdue: tasks.filter(task => task.is_overdue === true)
   };
 
@@ -555,7 +545,7 @@ const Dashboard = () => {
               onDragOver={handleDragOver}
               onDragEnter={() => handleDragEnter('assigned')}
               onDragLeave={handleDragLeave}
-              onDrop={(e) => handleDrop(e, 'assigned')}
+              onDrop={(e) => handleDrop(e, 'todo')}
             >
               <div className="flex items-center justify-between mb-4">
                 <h3 className="text-lg font-semibold text-gray-900 flex items-center">
@@ -649,7 +639,13 @@ const Dashboard = () => {
 
               <div className="space-y-3">
                 {tasksByStatus.in_progress.map((task) => (
-                  <div key={task.id} className="bg-gray-50 rounded-lg p-3 border border-gray-200 hover:shadow-md transition-shadow">
+                  <div
+                    key={task.id}
+                    draggable
+                    onDragStart={(e) => handleDragStart(e, task)}
+                    onDragEnd={handleDragEnd}
+                    className="bg-gray-50 rounded-lg p-3 border border-gray-200 hover:shadow-md transition-all cursor-move"
+                  >
                     <h4 className="text-gray-900 font-medium text-sm mb-2">{task.title}</h4>
                     <div className="flex items-center justify-between text-xs text-gray-500 mb-2">
                       <span className="capitalize font-medium">
@@ -703,7 +699,13 @@ const Dashboard = () => {
 
               <div className="space-y-3">
                 {tasksByStatus.in_review.map((task) => (
-                  <div key={task.id} className="bg-gray-50 rounded-lg p-3 border border-gray-200 hover:shadow-md transition-shadow">
+                  <div
+                    key={task.id}
+                    draggable
+                    onDragStart={(e) => handleDragStart(e, task)}
+                    onDragEnd={handleDragEnd}
+                    className="bg-gray-50 rounded-lg p-3 border border-gray-200 hover:shadow-md transition-all cursor-move"
+                  >
                     <h4 className="text-gray-900 font-medium text-sm mb-2">{task.title}</h4>
                     <div className="flex items-center justify-between text-xs text-gray-500">
                       <span className="capitalize font-medium">
@@ -749,7 +751,13 @@ const Dashboard = () => {
 
               <div className="space-y-3">
                 {tasksByStatus.completed.map((task) => (
-                  <div key={task.id} className="bg-green-50 rounded-lg p-3 border border-green-200 hover:shadow-md transition-shadow">
+                  <div
+                    key={task.id}
+                    draggable
+                    onDragStart={(e) => handleDragStart(e, task)}
+                    onDragEnd={handleDragEnd}
+                    className="bg-green-50 rounded-lg p-3 border border-green-200 hover:shadow-md transition-all cursor-move"
+                  >
                     <h4 className="text-gray-900 font-medium text-sm mb-2 line-through opacity-75">{task.title}</h4>
                     <div className="flex items-center justify-between text-xs text-gray-500">
                       <span className="capitalize font-medium">

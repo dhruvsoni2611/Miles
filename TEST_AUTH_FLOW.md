@@ -110,3 +110,4 @@ SELECT * FROM tasks ORDER BY created_at DESC LIMIT 5;
 3. **Check database** (task has real user ID in created_by)
 
 **The "session expired" message is good - it means authentication is working!** 🎉
+

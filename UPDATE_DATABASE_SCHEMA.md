@@ -63,3 +63,4 @@ tasks table columns:
 ```
 
 **After running the ALTER TABLE command, task creation should work perfectly!** 🚀
+

@@ -67,3 +67,4 @@ if __name__ == "__main__":
     print("=" * 40)
     create_minimal_env()
     print_setup_instructions()
+

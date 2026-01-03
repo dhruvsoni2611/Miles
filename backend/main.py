@@ -92,6 +92,7 @@ class TaskUpdate(BaseModel):
     due_date: Optional[datetime] = None
     notes: Optional[str] = None
     progress: Optional[int] = None
+    progress: Optional[int] = None
 
 class TaskResponse(TaskBase):
     id: str
@@ -866,14 +867,14 @@ async def get_task(task_id: str, current_user = Depends(get_current_user)):
 
 @app.put("/api/tasks/{task_id}", response_model=TaskResponse)
 async def update_task(task_id: str, task_data: TaskUpdate, current_user = Depends(get_current_user)):
-    """Update a task assigned to the current user"""
+    """Update a task that the user created or is assigned to"""
     try:
-        # Check if task exists and is assigned to the current user
+        # Check if task exists and user can update it (created by user OR assigned to user)
         user_id = current_user.id
-        existing_response = supabase_admin.table('tasks').select('id').eq('id', task_id).eq('assigned_to', user_id).execute()
+        existing_response = supabase_admin.table('tasks').select('id').or_(f'created_by.eq.{user_id},assigned_to.eq.{user_id}').eq('id', task_id).execute()
 
         if not existing_response.data or len(existing_response.data) == 0:
-            raise HTTPException(status_code=404, detail="Task not found")
+            raise HTTPException(status_code=404, detail="Task not found or access denied")
 
         # Update task
         update_dict = task_data.dict(exclude_unset=True)
@@ -886,7 +887,7 @@ async def update_task(task_id: str, task_data: TaskUpdate, current_user = Depend
 
         update_dict['updated_at'] = datetime.utcnow().isoformat()
 
-        response = supabase_admin.table('tasks').update(update_dict).eq('id', task_id).eq('assigned_to', user_id).execute()
+        response = supabase_admin.table('tasks').update(update_dict).eq('id', task_id).execute()
 
         if not response.data or len(response.data) == 0:
             raise HTTPException(status_code=500, detail="Failed to update task")
