@@ -4,6 +4,7 @@ import Login from './pages/Login'
 import Dashboard from './pages/Dashboard'
 import Home from './pages/Home'
 import AuthCallback from './pages/AuthCallback'
+import Calendar from './pages/Calendar'
 import './App.css'
 
 // Protected Route Component
@@ -49,6 +50,7 @@ const AppRouter = () => {
         <Route path="/" element={<Dashboard />} />
         <Route path="/login" element={<Login />} />
         <Route path="/home" element={<Home />} />
+        <Route path="/calendar" element={<Calendar />} />
         <Route path="/auth/callback" element={<AuthCallback />} />
 
 

@@ -1,18 +1,44 @@
 import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
+import DatePicker from 'react-datepicker';
+import 'react-datepicker/dist/react-datepicker.css';
+
+// Calendar Component for Due Date Selection
+const CalendarDatePicker = ({ selectedDate, onDateChange, placeholder = "Select due date" }) => {
+  return (
+    <div className="relative">
+      <DatePicker
+        selected={selectedDate ? new Date(selectedDate) : null}
+        onChange={(date) => onDateChange(date ? date.toISOString().split('T')[0] : '')}
+        minDate={new Date()}
+        dateFormat="yyyy-MM-dd"
+        placeholderText={placeholder}
+        className="w-full px-4 py-2 pl-10 bg-white border border-black rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 text-black transition-colors"
+        calendarClassName="custom-calendar"
+      />
+      <svg className="w-5 h-5 text-gray-400 absolute left-3 top-2.5 z-10" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" />
+      </svg>
+    </div>
+  );
+};
 
 const Dashboard = () => {
-  const [user, setUser] = useState(null);
   const [loading, setLoading] = useState(true);
   const [projects, setProjects] = useState([]);
   const navigate = useNavigate();
-  const { logout, ensureValidSession, isAuthenticated } = useAuth();
+  const { logout, ensureValidSession, isAuthenticated, loading: authLoading, user } = useAuth();
 
   // Tasks state
   const [tasks, setTasks] = useState([]);
   const [tasksLoading, setTasksLoading] = useState(true);
   const [tasksError, setTasksError] = useState(null);
+
+  // Managed employees state
+  const [managedEmployees, setManagedEmployees] = useState([]);
+  const [employeesLoading, setEmployeesLoading] = useState(false);
+  const [employeesError, setEmployeesError] = useState(null);
 
   // Modal states
   const [showTaskModal, setShowTaskModal] = useState(false);
@@ -35,10 +61,48 @@ const Dashboard = () => {
     required_skills: '',
     status: 'todo',
     assigned_to: '',
-    due_date: '',
-    notes: ''
+    due_date: ''
   });
 
+
+  // Fetch managed employees from API
+  const fetchManagedEmployees = async () => {
+    try {
+      setEmployeesLoading(true);
+      setEmployeesError(null);
+
+      // Ensure we have a valid token
+      let token;
+      try {
+        token = await ensureValidSession();
+      } catch (authError) {
+        console.error('Authentication error:', authError);
+        setEmployeesError('Please login to view employees');
+        setManagedEmployees([]);
+        setEmployeesLoading(false);
+        return;
+      }
+
+      const response = await fetch('http://localhost:8000/api/employees/managed', {
+        headers: {
+          'Authorization': `Bearer ${token}`,
+        },
+      });
+
+      if (!response.ok) {
+        throw new Error(`Failed to fetch employees: ${response.status}`);
+      }
+
+      const data = await response.json();
+      setManagedEmployees(data.employees || []);
+    } catch (error) {
+      console.error('Error fetching managed employees:', error);
+      setEmployeesError(error.message);
+      setManagedEmployees([]);
+    } finally {
+      setEmployeesLoading(false);
+    }
+  };
 
   // Fetch tasks from API
   const fetchTasks = async () => {
@@ -173,9 +237,12 @@ const Dashboard = () => {
   };
 
   useEffect(() => {
+    // Only check auth after AuthContext has finished loading
+    if (!authLoading) {
     checkAuth();
     fetchProjects();
-  }, []);
+    }
+  }, [authLoading]);
 
   // Fetch tasks when user is authenticated
   useEffect(() => {
@@ -203,14 +270,14 @@ const Dashboard = () => {
   const checkAuth = async () => {
     try {
       // Check if user is authenticated via AuthContext
-      if (!user) {
+      if (!isAuthenticated()) {
         console.log('Dashboard: No authenticated user, redirecting to login');
         navigate('/login');
         return;
       }
 
       // Check user role - allow managers and admins to access dashboard
-      if (user.role !== 'manager' && user.role !== 'admin') {
+      if (!user || (user.role !== 'manager' && user.role !== 'admin')) {
         console.log('Dashboard: User does not have required role (manager/admin)');
         alert('Access denied. Only managers and administrators can access the dashboard.');
         navigate('/login');
@@ -258,6 +325,9 @@ const Dashboard = () => {
       alert('Only administrators can add tasks.');
       return;
     }
+
+    // Fetch managed employees when opening the modal
+    fetchManagedEmployees();
     setShowTaskModal(true);
   };
 
@@ -311,8 +381,7 @@ const Dashboard = () => {
         required_skills: newTask.required_skills ? newTask.required_skills.split(',').map(skill => skill.trim()).filter(skill => skill) : [],
         status: newTask.status,
         assigned_to: newTask.assigned_to || null,
-        due_date: newTask.due_date ? new Date(newTask.due_date).toISOString() : null,
-        notes: newTask.notes
+        due_date: newTask.due_date ? new Date(newTask.due_date).toISOString() : null
       };
 
       console.log('Creating task with data:', taskData);
@@ -359,8 +428,7 @@ const Dashboard = () => {
         required_skills: '',
         status: 'todo',
         assigned_to: '',
-        due_date: '',
-        notes: ''
+        due_date: ''
       });
       setShowTaskModal(false);
 
@@ -488,7 +556,7 @@ const Dashboard = () => {
     }
   };
 
-  if (loading) {
+  if (loading || authLoading) {
     return (
       <div className="min-h-screen bg-gray-50 flex items-center justify-center">
         <div className="bg-white rounded-lg shadow-sm border border-gray-200 p-8 text-center">
@@ -516,6 +584,15 @@ const Dashboard = () => {
 
               <div className="flex items-center space-x-4">
                 <span className="text-gray-600">Welcome, {user?.name || user?.email?.split('@')[0]}</span>
+                <button
+                  onClick={() => navigate('/calendar')}
+                  className="px-4 py-2 bg-purple-600 hover:bg-purple-700 rounded-lg text-white transition-colors flex items-center space-x-2 font-medium"
+                >
+                  <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" />
+                  </svg>
+                  <span>Calendar</span>
+                </button>
               </div>
 
               {/* Action Buttons */}
@@ -1062,34 +1139,39 @@ const Dashboard = () => {
                               Assign To
                             </label>
                             <div className="relative">
-                              <input
-                                type="text"
+                              <select
                                 value={newTask.assigned_to}
                                 onChange={(e) => setNewTask(prev => ({ ...prev, assigned_to: e.target.value }))}
                                 className="w-full px-4 py-2 pl-10 bg-white border border-black rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 text-black transition-colors"
-                                placeholder="User ID or email"
-                              />
-                              <svg className="w-5 h-5 text-gray-400 absolute left-3 top-2.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                              >
+                                <option value="">Select an employee (optional)</option>
+                                {managedEmployees.map((employee) => (
+                                  <option key={employee.auth_id} value={employee.auth_id}>
+                                    {employee.name} ({employee.email})
+                                  </option>
+                                ))}
+                              </select>
+                              <svg className="w-5 h-5 text-gray-400 absolute left-3 top-2.5 z-10" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z" />
                               </svg>
                             </div>
+                            {employeesLoading && (
+                              <p className="text-sm text-gray-500 mt-1">Loading employees...</p>
+                            )}
+                            {employeesError && (
+                              <p className="text-sm text-red-500 mt-1">Error loading employees: {employeesError}</p>
+                            )}
                           </div>
 
                           <div>
                             <label className="block text-sm font-medium text-gray-700 mb-2">
                               Due Date
                             </label>
-                            <div className="relative">
-                              <input
-                                type="date"
-                                value={newTask.due_date}
-                                onChange={(e) => setNewTask(prev => ({ ...prev, due_date: e.target.value }))}
-                                className="w-full px-4 py-2 pl-10 bg-white border border-black rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 text-black transition-colors"
-                              />
-                              <svg className="w-5 h-5 text-gray-400 absolute left-3 top-2.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" />
-                              </svg>
-                            </div>
+                            <CalendarDatePicker
+                              selectedDate={newTask.due_date}
+                              onDateChange={(date) => setNewTask(prev => ({ ...prev, due_date: date }))}
+                              placeholder="Select due date"
+                            />
                           </div>
                         </div>
                       </div>
@@ -1166,18 +1248,6 @@ const Dashboard = () => {
                             />
                           </div>
 
-                          <div>
-                            <label className="block text-sm font-medium text-gray-700 mb-2">
-                              Additional Notes
-                            </label>
-                            <textarea
-                              value={newTask.notes}
-                              onChange={(e) => setNewTask(prev => ({ ...prev, notes: e.target.value }))}
-                              className="w-full px-3 py-2 bg-white border border-black rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 text-black transition-colors resize-none"
-                              placeholder="Any additional information..."
-                              rows="3"
-                            />
-                          </div>
                         </div>
                       </div>
                     </div>

@@ -12,7 +12,7 @@ const Login = () => {
     email: '',
     password: '',
     name: '',
-    role: 'employee'
+    role: 'admin'  // Default to admin role
   });
   const [loading, setLoading] = useState(false);
   const [googleLoading, setGoogleLoading] = useState(false);
@@ -44,11 +44,38 @@ const Login = () => {
     setError('');
 
     try {
+      // Call backend login API to get proper user data with role
+      const response = await fetch('http://localhost:8000/api/auth/login', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          email: formData.email,
+          password: formData.password,
+        }),
+      });
+
+      if (!response.ok) {
+        const errorData = await response.json();
+        throw new Error(errorData.detail || 'Login failed');
+      }
+
+      const loginData = await response.json();
+      console.log('Login successful:', loginData);
+
+      // Store the user data and token
+      localStorage.setItem('token', loginData.access_token);
+      localStorage.setItem('user', JSON.stringify(loginData.user));
+
+      // Also sign in with Supabase for session management
       await login(formData.email, formData.password);
+
       // Login successful, redirect to dashboard
       navigate('/');
 
     } catch (err) {
+      console.error('Login error:', err);
       setError(err.message || 'Login failed. Please try again.');
     } finally {
       setLoading(false);
@@ -148,17 +175,17 @@ const Login = () => {
           <form onSubmit={isSignup ? handleSignupSubmit : handleSubmit} className="space-y-6">
             {isSignup && (
               <>
-                {/* Role Notice */}
-                <div className="glass-card p-3 border-yellow-400/30 bg-yellow-500/10">
+                {/* Signup Notice */}
+                <div className="glass-card p-3 border-blue-400/30 bg-blue-500/10">
                   <div className="flex items-center">
                     <div className="flex-shrink-0">
-                      <svg className="h-5 w-5 text-yellow-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-2.5L13.732 4c-.77-.833-1.964-.833-2.732 0L4.082 16.5c-.77.833.192 2.5 1.732 2.5z" />
+                      <svg className="h-5 w-5 text-blue-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
                       </svg>
                     </div>
                     <div className="ml-3">
-                      <p className="text-sm text-yellow-200">
-                        <strong>Important:</strong> Choose your account type below. This determines your permissions in the system.
+                      <p className="text-sm text-blue-200">
+                        <strong>Welcome!</strong> Create your admin account to access the full dashboard and manage your team.
                       </p>
                     </div>
                   </div>
@@ -180,30 +207,6 @@ const Login = () => {
                     value={signupData.name}
                     onChange={handleSignupInputChange}
                   />
-                </div>
-
-                {/* Role Selection (Signup only) */}
-                <div>
-                  <label htmlFor="role" className="block text-sm font-medium text-white/90 mb-2">
-                    🎯 Account Type <span className="text-red-400">*</span>
-                  </label>
-                  <select
-                    id="role"
-                    name="role"
-                    required
-                    className="w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 text-black"
-                    value={signupData.role}
-                    onChange={handleSignupInputChange}
-                  >
-                    <option value="employee">👤 Employee - Access basic features</option>
-                    <option value="admin">👑 Administrator - Full system access</option>
-                  </select>
-                  <div className="mt-2 p-2 bg-indigo-500/10 border border-indigo-400/30 rounded">
-                    <p className="text-xs text-indigo-200">
-                      <strong>Employee:</strong> Create and manage your tasks<br/>
-                      <strong>Administrator:</strong> Manage all users and system settings
-                    </p>
-                  </div>
                 </div>
               </>
             )}

@@ -51,7 +51,7 @@ class SignupRequest(BaseModel):
     email: str  # Using str instead of EmailStr to avoid dependency issues
     password: str
     name: str
-    role: str = "employee"  # "admin" or "employee"
+    role: str = "admin"  # Default to admin for all signups
 
 class TokenResponse(BaseModel):
     access_token: str
@@ -929,6 +929,58 @@ async def delete_task(task_id: str, current_user = Depends(get_current_user)):
         raise HTTPException(status_code=500, detail="Failed to delete task")
 
 # Employees API
+@app.get("/api/employees/managed")
+async def get_managed_employees(current_user = Depends(get_current_user)):
+    """Get employees managed by the current user (manager/admin)"""
+    try:
+        manager_id = current_user.id
+        print(f"Fetching managed employees for manager: {manager_id}")
+
+        # Query user_reporting table to get all employees under this manager
+        reporting_response = supabase_admin.table('user_reporting') \
+            .select('employee_id') \
+            .eq('manager_id', manager_id) \
+            .execute()
+
+        print(f"Reporting response data: {reporting_response.data}")
+
+        if not reporting_response.data or len(reporting_response.data) == 0:
+            print("No employees found for this manager")
+            return {"employees": [], "total": 0}
+
+        # Get employee IDs
+        employee_ids = [record['employee_id'] for record in reporting_response.data]
+        print(f"Employee IDs to fetch: {employee_ids}")
+
+        # Handle empty employee_ids list
+        if not employee_ids:
+            print("No employee IDs to query")
+            return {"employees": [], "total": 0}
+
+        # Fetch employee details from user_miles table
+        employees_response = supabase_admin.table('user_miles') \
+            .select('auth_id, name, email, role, profile_picture') \
+            .in_('auth_id', employee_ids) \
+            .execute()
+
+        employees = employees_response.data or []
+        print(f"Found {len(employees)} employees")
+
+        # Sort by name
+        employees.sort(key=lambda x: x.get('name', '').lower())
+
+        return {
+            "employees": employees,
+            "total": len(employees)
+        }
+
+    except Exception as e:
+        print(f"Get managed employees error: {e}")
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=f"Failed to fetch managed employees: {str(e)}")
+
+
 @app.get("/api/employees")
 async def get_employees(
     status: Optional[str] = None,

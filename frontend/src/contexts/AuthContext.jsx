@@ -29,13 +29,24 @@ export const AuthProvider = ({ children }) => {
 
         if (session && session.user) {
           console.log('AuthContext: Valid session found for user:', session.user.email);
-          const role = session.user.user_metadata?.role || 'employee';
 
-          const userData = {
+          // First try to get user data from localStorage (set by backend login)
+          let storedUserData = null;
+          try {
+            const storedUser = localStorage.getItem('user');
+            if (storedUser) {
+              storedUserData = JSON.parse(storedUser);
+            }
+          } catch (e) {
+            console.warn('AuthContext: Could not parse stored user data');
+          }
+
+          // Use stored data if available, otherwise fall back to metadata
+          const userData = storedUserData || {
             id: session.user.id,
             email: session.user.email,
             name: session.user.user_metadata?.name || '',
-            role: role,
+            role: session.user.user_metadata?.role || 'employee',
             is_active: true,
             created_at: session.user.created_at
           };
@@ -44,9 +55,11 @@ export const AuthProvider = ({ children }) => {
           setUser(userData);
           setToken(session.access_token);
 
-          // Store in localStorage for persistence
-          localStorage.setItem('token', session.access_token);
-          localStorage.setItem('user', JSON.stringify(userData));
+          // Store in localStorage for persistence (if not already stored)
+          if (!storedUserData) {
+            localStorage.setItem('token', session.access_token);
+            localStorage.setItem('user', JSON.stringify(userData));
+          }
         } else {
           console.log('AuthContext: No valid session, clearing data');
           // Clear any stale data
@@ -74,21 +87,36 @@ export const AuthProvider = ({ children }) => {
         console.log('AuthContext: Auth state change - event:', event, 'session:', !!session);
         if (session && session.user) {
           console.log('AuthContext: User signed in:', session.user.email);
-          const role = session.user.user_metadata?.role || 'employee';
 
-          const userData = {
+          // First try to get user data from localStorage (set by backend login)
+          let storedUserData = null;
+          try {
+            const storedUser = localStorage.getItem('user');
+            if (storedUser) {
+              storedUserData = JSON.parse(storedUser);
+            }
+          } catch (e) {
+            console.warn('AuthContext: Could not parse stored user data');
+          }
+
+          // Use stored data if available, otherwise fall back to metadata
+          const userData = storedUserData || {
             id: session.user.id,
             email: session.user.email,
             name: session.user.user_metadata?.name || '',
-            role: role,
+            role: session.user.user_metadata?.role || 'employee',
             is_active: true,
             created_at: session.user.created_at
           };
 
           setUser(userData);
           setToken(session.access_token);
-          localStorage.setItem('token', session.access_token);
-          localStorage.setItem('user', JSON.stringify(userData));
+
+          // Store in localStorage for persistence (if not already stored)
+          if (!storedUserData) {
+            localStorage.setItem('token', session.access_token);
+            localStorage.setItem('user', JSON.stringify(userData));
+          }
         } else {
           console.log('AuthContext: User signed out or no session');
           setUser(null);

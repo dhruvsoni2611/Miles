@@ -88,6 +88,21 @@ async def create_task(
                 detail="Database connection failed or tasks table not found"
             )
 
+        # Validate assigned_to is a managed employee (if provided)
+        if task.assigned_to:
+            # Check if the assigned user is actually managed by this user
+            reporting_check = get_supabase_admin().table('user_reporting') \
+                .select('employee_id') \
+                .eq('manager_id', user_id) \
+                .eq('employee_id', task.assigned_to) \
+                .execute()
+
+            if not reporting_check.data or len(reporting_check.data) == 0:
+                raise HTTPException(
+                    status_code=status.HTTP_403_FORBIDDEN,
+                    detail="You can only assign tasks to employees you manage"
+                )
+
         # 4. DATA PREPARATION
         task_data = {
             "created_by": user_id,  # Use created_by field in database
