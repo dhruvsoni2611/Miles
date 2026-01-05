@@ -260,8 +260,16 @@ USING (
 );
 
 -- ASSIGNMENTS & SKILLS
-CREATE POLICY "View assignments"
+CREATE POLICY IF NOT EXISTS "View assignments"
 ON public.assignments FOR SELECT
+USING (true);
+
+CREATE POLICY IF NOT EXISTS "Insert assignments"
+ON public.assignments FOR INSERT
+WITH CHECK (true);
+
+CREATE POLICY IF NOT EXISTS "Update assignments"
+ON public.assignments FOR UPDATE
 USING (true);
 
 CREATE POLICY "View skills"

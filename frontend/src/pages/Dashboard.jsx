@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
+import { SkillsSelection } from '../components';
 import DatePicker from 'react-datepicker';
 import 'react-datepicker/dist/react-datepicker.css';
 
@@ -48,7 +49,8 @@ const Dashboard = () => {
   const [newEmployee, setNewEmployee] = useState({
     email: '',
     name: '',
-    profile_picture: ''
+    profile_picture: '',
+    skill_vector: []
   });
 
   // New task form
@@ -58,7 +60,7 @@ const Dashboard = () => {
     project_id: '',
     priority: 'medium',
     difficulty_level: 1,
-    required_skills: '',
+    required_skills: [],
     status: 'todo',
     assigned_to: '',
     due_date: ''
@@ -376,18 +378,24 @@ const Dashboard = () => {
       const taskData = {
         title: newTask.title,
         description: newTask.description,
+        project_id: newTask.project_id || null,
         priority: newTask.priority, // Send as string, backend converts to int
         difficulty_level: parseInt(newTask.difficulty_level),
-        required_skills: newTask.required_skills ? newTask.required_skills.split(',').map(skill => skill.trim()).filter(skill => skill) : [],
+        required_skills: newTask.required_skills || [],
         status: newTask.status,
         assigned_to: newTask.assigned_to || null,
         due_date: newTask.due_date ? new Date(newTask.due_date).toISOString() : null
       };
 
       console.log('Creating task with data:', taskData);
+      console.log('FRONTEND DEBUG: assigned_to raw value:', newTask.assigned_to);
+      console.log('FRONTEND DEBUG: assigned_to type:', typeof newTask.assigned_to);
+      console.log('FRONTEND DEBUG: assigned_to truthy:', !!newTask.assigned_to);
+      console.log('FRONTEND DEBUG: taskData.assigned_to:', taskData.assigned_to);
 
-      // Make authenticated API call to backend
-      const response = await fetch('http://localhost:8000/api/tasks', {
+      // STEP 1: Create the task
+      console.log('🚀 STEP 1: Creating task...');
+      const taskResponse = await fetch('http://localhost:8000/api/tasks', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -396,27 +404,78 @@ const Dashboard = () => {
         body: JSON.stringify(taskData),
       });
 
-      if (!response.ok) {
-        let errorMessage = `Failed to create task (${response.status})`;
+      if (!taskResponse.ok) {
+        let errorMessage = `Failed to create task (${taskResponse.status})`;
 
         try {
-          const errorData = await response.json();
+          const errorData = await taskResponse.json();
+          console.error('Task creation error:', errorData);
           if (errorData.detail) {
-            errorMessage = errorData.detail;
+            if (Array.isArray(errorData.detail)) {
+              // Pydantic validation errors
+              errorMessage = errorData.detail.map(err => `${err.loc.join('.')}: ${err.msg}`).join('\n');
+            } else {
+              errorMessage = errorData.detail;
+            }
           } else if (typeof errorData === 'object') {
             // Handle different error response formats
             errorMessage = JSON.stringify(errorData, null, 2);
           }
         } catch (parseError) {
           // If we can't parse JSON, use the status text
-          errorMessage = `Failed to create task: ${response.status} ${response.statusText}`;
+          errorMessage = `Failed to create task: ${taskResponse.status} ${taskResponse.statusText}`;
         }
 
         throw new Error(errorMessage);
       }
 
-      const createdTask = await response.json();
-      console.log('Task created successfully:', createdTask);
+      const taskResult = await taskResponse.json();
+      console.log('✅ Task created successfully:', taskResult);
+
+      // STEP 2: Create assignment record if task has assignee
+      if (taskData.assigned_to) {
+        console.log('🚀 STEP 2: Creating assignment record...');
+
+        // Get current user ID from auth context
+        const currentUserId = user?.id;
+        if (!currentUserId) {
+          console.warn('⚠️ No current user ID available for assignment');
+          alert('Task created successfully, but could not create assignment record (user not authenticated).');
+          return;
+        }
+
+        const assignmentData = {
+          task_id: taskResult.data.id,        // REAL task ID from task creation response
+          user_id: taskData.assigned_to,       // Assignee from form data
+          assigned_by: currentUserId,          // Current user (manager) from auth
+          assigned_at: new Date().toISOString()
+        };
+
+        console.log('Assignment data being sent:', assignmentData);
+
+        try {
+          const assignmentResponse = await fetch('http://localhost:8000/api/assignments', {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              'Authorization': `Bearer ${token}`,
+            },
+            body: JSON.stringify(assignmentData),
+          });
+
+          if (!assignmentResponse.ok) {
+            const errorText = await assignmentResponse.text();
+            console.warn('⚠️ Task created but assignment failed:', errorText);
+            alert(`Task created successfully, but assignment record creation failed: ${assignmentResponse.status}`);
+          } else {
+            const assignmentResult = await assignmentResponse.json();
+            console.log('✅ Assignment created successfully:', assignmentResult);
+          }
+        } catch (assignmentError) {
+          console.warn('⚠️ Assignment creation error:', assignmentError);
+          alert('Task created successfully, but assignment record creation failed.');
+        }
+      }
 
       // Reset form and close modal
       setNewTask({
@@ -425,7 +484,7 @@ const Dashboard = () => {
         project_id: '',
         priority: 'medium',
         difficulty_level: 1,
-        required_skills: '',
+        required_skills: [],
         status: 'todo',
         assigned_to: '',
         due_date: ''
@@ -433,7 +492,7 @@ const Dashboard = () => {
       setShowTaskModal(false);
 
       // Show success message
-      alert('Task created successfully! Check console for task data.');
+      alert('Task and assignment processing completed! Check console for details.');
 
     } catch (error) {
       console.error('Error creating task:', error);
@@ -469,7 +528,8 @@ const Dashboard = () => {
       const employeeData = {
         email: newEmployee.email,
         name: newEmployee.name,
-        profile_picture: newEmployee.profile_picture || null
+        profile_picture: newEmployee.profile_picture || null,
+        skill_vector: newEmployee.skill_vector.length > 0 ? newEmployee.skill_vector.join(', ') : ''
       };
 
       console.log('Creating employee with data:', employeeData);
@@ -508,7 +568,8 @@ const Dashboard = () => {
       setNewEmployee({
         email: '',
         name: '',
-        profile_picture: ''
+        profile_picture: '',
+        skill_vector: []
       });
       setShowEmployeeModal(false);
 
@@ -1235,19 +1296,11 @@ const Dashboard = () => {
                         </div>
 
                         <div className="space-y-4">
-                          <div>
-                            <label className="block text-sm font-medium text-gray-700 mb-2">
-                              Required Skills
-                            </label>
-                            <input
-                              type="text"
-                              value={newTask.required_skills}
-                              onChange={(e) => setNewTask(prev => ({ ...prev, required_skills: e.target.value }))}
-                              className="w-full px-3 py-2 bg-white border border-black rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 text-black transition-colors"
-                              placeholder="JavaScript, React, Python"
-                            />
-                          </div>
-
+                          <SkillsSelection
+                            selectedSkills={newTask.required_skills}
+                            onSkillsChange={(skills) => setNewTask(prev => ({ ...prev, required_skills: skills }))}
+                            placeholder="Select required skills for this task..."
+                          />
                         </div>
                       </div>
                     </div>
@@ -1359,7 +1412,7 @@ const Dashboard = () => {
                       </div>
 
                       {/* Profile Picture URL */}
-                      <div>
+                      <div className="mb-4">
                         <label className="block text-sm font-medium text-gray-700 mb-2">
                           Profile Picture URL
                         </label>
@@ -1377,6 +1430,13 @@ const Dashboard = () => {
                         </div>
                         <p className="text-xs text-gray-500 mt-1">Optional: Leave empty to use default profile picture</p>
                       </div>
+
+                      {/* Skills */}
+                      <SkillsSelection
+                        selectedSkills={newEmployee.skill_vector}
+                        onSkillsChange={(skills) => setNewEmployee(prev => ({ ...prev, skill_vector: skills }))}
+                        placeholder="Select employee skills..."
+                      />
                     </div>
 
                     {/* Action Buttons */}

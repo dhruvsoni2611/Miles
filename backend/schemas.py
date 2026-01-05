@@ -4,7 +4,7 @@ from datetime import datetime, timezone
 
 # User Task Creation Schema
 class UserTaskCreate(BaseModel):
-    title: str = Field(..., min_length=1, max_length=255, description="Task title (1-255 characters)")
+    title: Optional[str] = Field("Test Task", min_length=1, max_length=255, description="Task title (1-255 characters)")
     description: Optional[str] = None
     project_id: Optional[str] = None  # UUID string for project reference
     priority: str = Field("medium", pattern="^(low|medium|high|urgent)$", description="Task priority level")
@@ -44,6 +44,7 @@ class EmployeeCreate(BaseModel):
     email: str = Field(..., min_length=5, max_length=255, description="Employee email address")
     name: str = Field(..., min_length=1, max_length=255, description="Employee full name")
     profile_picture: Optional[str] = Field(None, description="Profile picture URL")
+    skill_vector: Optional[str] = Field("", description="Comma-separated list of employee skills")
 
     @validator('email')
     def email_must_be_valid(cls, v):

@@ -110,6 +110,7 @@ class EmployeeBase(BaseModel):
     department: Optional[str] = None
     position: Optional[str] = None
     phone: Optional[str] = None
+    skill_vector: Optional[str] = None
 
 class EmployeeCreate(EmployeeBase):
     pass
@@ -352,7 +353,7 @@ async def test_tables():
     """Test endpoint to check what tables exist in the database"""
     try:
         # This is a simple way to check if tables exist by trying to query them
-        tables_to_check = ['task_admins', 'taskadmin', 'users', 'profiles']
+        tables_to_check = ['taskadmin', 'users', 'user_miles']
         results = {}
 
         for table_name in tables_to_check:
@@ -737,6 +738,21 @@ async def create_task(task_data: TaskBase, current_user = Depends(get_current_us
         # Get current user ID
         user_id = current_user.id
 
+        # Validate required skills if provided
+        if task_data.required_skills and len(task_data.required_skills) > 0:
+            # Check if all provided skills exist in the skills table
+            skills_response = supabase.table('skills').select('name').in_('name', task_data.required_skills).execute()
+            existing_skills = [skill['name'] for skill in skills_response.data or []]
+
+            # Find invalid skills
+            invalid_skills = [skill for skill in task_data.required_skills if skill not in existing_skills]
+
+            if invalid_skills:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Invalid skills provided: {', '.join(invalid_skills)}. Please select skills from the available options."
+                )
+
         # Prepare task data for insertion
         task_dict = task_data.dict()
         task_dict['created_by'] = user_id
@@ -876,6 +892,21 @@ async def update_task(task_id: str, task_data: TaskUpdate, current_user = Depend
         if not existing_response.data or len(existing_response.data) == 0:
             raise HTTPException(status_code=404, detail="Task not found or access denied")
 
+        # Validate required skills if provided
+        if task_data.required_skills is not None and len(task_data.required_skills) > 0:
+            # Check if all provided skills exist in the skills table
+            skills_response = supabase.table('skills').select('name').in_('name', task_data.required_skills).execute()
+            existing_skills = [skill['name'] for skill in skills_response.data or []]
+
+            # Find invalid skills
+            invalid_skills = [skill for skill in task_data.required_skills if skill not in existing_skills]
+
+            if invalid_skills:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Invalid skills provided: {', '.join(invalid_skills)}. Please select skills from the available options."
+                )
+
         # Update task
         update_dict = task_data.dict(exclude_unset=True)
 
@@ -897,6 +928,9 @@ async def update_task(task_id: str, task_data: TaskUpdate, current_user = Depend
         # Ensure progress field exists (fallback for databases without the field yet)
         if 'progress' not in updated_task:
             updated_task['progress'] = 0
+
+        # Assignment creation is now handled by frontend via separate API call
+        # This allows for better error handling and separation of concerns
 
         return TaskResponse(**updated_task)
 
@@ -927,6 +961,142 @@ async def delete_task(task_id: str, current_user = Depends(get_current_user)):
     except Exception as e:
         print(f"Delete task error: {e}")
         raise HTTPException(status_code=500, detail="Failed to delete task")
+
+# Test assignment creation directly
+@app.post("/api/test-direct-assignment")
+async def test_direct_assignment():
+    """Test assignment creation directly"""
+    try:
+        from routers.employee_management import get_supabase_admin
+        supabase_client = get_supabase_admin()
+
+        # Create a test assignment record
+        test_assignment = {
+            'task_id': '550e8400-e29b-41d4-a716-446655440000',  # dummy UUID
+            'user_id': '550e8400-e29b-41d4-a716-446655440001',  # dummy UUID
+            'assigned_by': '550e8400-e29b-41d4-a716-446655440002', # dummy UUID
+            'assigned_at': '2024-01-01T12:00:00.000Z'
+        }
+
+        print(f"DEBUG: Testing direct assignment creation: {test_assignment}")
+        response = supabase_client.table("assignments").insert(test_assignment).execute()
+        print(f"DEBUG: Direct assignment response: {response}")
+
+        return {
+            "success": True,
+            "test_assignment": test_assignment,
+            "response": response.data,
+            "message": "Direct assignment creation test completed"
+        }
+
+    except Exception as e:
+        print(f"Direct assignment test error: {e}")
+        import traceback
+        traceback.print_exc()
+        return {"success": False, "error": str(e)}
+
+# Simple test assignment creation
+@app.post("/api/test-create-assignment")
+async def test_create_assignment():
+    """Test assignment creation with known good data"""
+    try:
+        from routers.employee_management import get_supabase_admin
+        supabase_client = get_supabase_admin()
+
+        # Create assignment with hardcoded test data
+        test_assignment = {
+            'task_id': '550e8400-e29b-41d4-a716-446655440000',  # dummy task ID
+            'user_id': '35ece19f-d073-46d5-9d19-a26424895a74',   # real user ID (from your data)
+            'assigned_by': '58d91fe2-1401-46fd-b183-a2a118997fc1', # real user ID
+            'assigned_at': '2024-01-01T12:00:00.000Z'
+        }
+
+        print(f"SIMPLE TEST: Creating assignment: {test_assignment}")
+        response = supabase_client.table("assignments").insert(test_assignment).execute()
+        print(f"SIMPLE TEST: Response: {response}")
+        print(f"SIMPLE TEST: Response data: {response.data}")
+
+        return {
+            "success": True,
+            "test_assignment": test_assignment,
+            "response": response.data,
+            "message": "Simple assignment creation test completed"
+        }
+
+    except Exception as e:
+        print(f"SIMPLE TEST ERROR: {e}")
+        import traceback
+        traceback.print_exc()
+        return {"success": False, "error": str(e)}
+
+# Create assignment record
+@app.post("/api/assignments")
+async def create_assignment(assignment: dict, current_user = Depends(get_current_user)):
+    """Create an assignment record"""
+    try:
+        from routers.employee_management import get_supabase_admin
+        supabase_client = get_supabase_admin()
+
+        # Validate required fields
+        required_fields = ['task_id', 'user_id', 'assigned_by']
+        for field in required_fields:
+            if field not in assignment:
+                raise HTTPException(status_code=400, detail=f"Missing required field: {field}")
+
+        assignment_data = {
+            'task_id': assignment['task_id'],
+            'user_id': assignment['user_id'],
+            'assigned_by': assignment['assigned_by'],
+            'assigned_at': assignment.get('assigned_at', datetime.utcnow().isoformat())
+        }
+
+        print(f"Creating assignment record: {assignment_data}")
+        response = supabase_client.table("assignments").insert(assignment_data).execute()
+
+        if not response.data:
+            raise HTTPException(status_code=500, detail="Failed to create assignment record")
+
+        print(f"Assignment created successfully: {response.data[0]}")
+        return {"success": True, "data": response.data[0]}
+
+    except Exception as e:
+        print(f"Assignment creation error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+# Check assignments table data
+@app.get("/api/check-assignments")
+async def check_assignments():
+    """Check current state of assignments table"""
+    try:
+        from routers.employee_management import get_supabase_admin
+        supabase_client = get_supabase_admin()
+
+        # Get all assignments
+        assignments = supabase_client.table("assignments").select("*").limit(20).execute()
+
+        # Get tasks with assignments
+        tasks_with_assignments = supabase_client.table("tasks").select("*").not_("assigned_to", "is", None).limit(10).execute()
+
+        return {
+            "success": True,
+            "assignments_count": len(assignments.data) if assignments.data else 0,
+            "assignments": assignments.data,
+            "tasks_with_assignments_count": len(tasks_with_assignments.data) if tasks_with_assignments.data else 0,
+            "tasks_with_assignments": [
+                {
+                    "id": task["id"],
+                    "title": task["title"],
+                    "assigned_to": task["assigned_to"],
+                    "created_by": task["created_by"]
+                } for task in (tasks_with_assignments.data or [])
+            ]
+        }
+
+    except Exception as e:
+        print(f"Check assignments error: {e}")
+        import traceback
+        traceback.print_exc()
+        return {"success": False, "error": str(e)}
 
 # Employees API
 @app.get("/api/employees/managed")
@@ -1129,6 +1299,69 @@ async def delete_employee(employee_id: str, current_user: dict = Depends(get_cur
     except Exception as e:
         print(f"Delete employee error: {e}")
         raise HTTPException(status_code=500, detail="Failed to delete employee")
+
+# Skills API Endpoints
+@app.get("/api/skills/categories")
+async def get_skill_categories(current_user: dict = Depends(get_current_user)):
+    """Get all unique skill categories from the skills table"""
+    try:
+        # Query distinct categories from skills table
+        response = supabase.table('skills').select('category').execute()
+
+        if not response.data:
+            return {"categories": []}
+
+        # Extract unique categories
+        categories = list(set(skill['category'] for skill in response.data if skill.get('category')))
+        categories.sort()  # Sort alphabetically
+
+        return {
+            "categories": categories,
+            "total": len(categories)
+        }
+
+    except Exception as e:
+        print(f"Get skill categories error: {e}")
+        raise HTTPException(status_code=500, detail="Failed to fetch skill categories")
+
+@app.get("/api/skills")
+async def get_skills(
+    category: Optional[str] = None,
+    search: Optional[str] = None,
+    current_user: dict = Depends(get_current_user)
+):
+    """Get skills, optionally filtered by category"""
+    try:
+        query = supabase.table('skills').select('*')
+
+        # Filter by category if provided
+        if category:
+            query = query.eq('category', category)
+
+        response = query.execute()
+        skills = response.data or []
+
+        # Apply search filter if provided
+        if search:
+            search_term = search.lower()
+            skills = [
+                skill for skill in skills
+                if search_term in skill.get('name', '').lower() or
+                   search_term in skill.get('category', '').lower()
+            ]
+
+        # Sort skills by name
+        skills.sort(key=lambda x: x.get('name', '').lower())
+
+        return {
+            "skills": skills,
+            "total": len(skills),
+            "category": category
+        }
+
+    except Exception as e:
+        print(f"Get skills error: {e}")
+        raise HTTPException(status_code=500, detail="Failed to fetch skills")
 
 # Protected User Endpoints
 @app.get("/api/user/profile")

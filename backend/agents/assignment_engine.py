@@ -11,10 +11,16 @@ users, user_skills, task_skill_requirements, assignments
 """
 
 import logging
+import os
 from typing import List, Dict, Any, Optional
 from uuid import UUID
 import numpy as np
 from core.database import get_supabase_client
+
+try:
+    from openai import OpenAI
+except ImportError:
+    OpenAI = None
 
 logger = logging.getLogger(__name__)
 
@@ -166,6 +172,9 @@ class AssignmentEngine:
         elif load >= 0.33:
             workload_indicator = "medium"
 
+        # Collect matched skills for optional AI rationale
+        matched_skills = [r["skill"] for r in task_req_skills if r["skill"] in user_skills]
+
         return {
             "user_id": user["id"],
             "total_score": total_score,
@@ -173,8 +182,58 @@ class AssignmentEngine:
                 "skill_match_score": skill_score,
                 "productivity_score": perf_score,
                 "workload_indicator": workload_indicator,
-            }
+            },
+            "matched_skills": matched_skills,
         }
+
+    def _enrich_with_ai_reasoning(self, task_req: List[Dict[str, Any]], suggestions: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """
+        Optionally call OpenAI to produce a brief rationale for the top candidates.
+        Falls back silently if OpenAI is not available or fails.
+        """
+        if OpenAI is None or not os.getenv("OPENAI_API_KEY"):
+            return suggestions
+
+        try:
+            client = OpenAI(api_key=os.environ["OPENAI_API_KEY"])
+            top = suggestions[:3]
+            req_names = [r.get("skill") for r in task_req if r.get("skill")]
+            candidate_lines = []
+            for idx, s in enumerate(top):
+                reasons = s.get("reasons", {})
+                matched_skills = s.get("matched_skills", [])
+                candidate_lines.append(
+                    f"{idx+1}. user_id={s.get('user_id')} "
+                    f"skill_match={reasons.get('skill_match_score', 0):.2f} "
+                    f"productivity={reasons.get('productivity_score', 0):.2f} "
+                    f"workload={reasons.get('workload_indicator', 'low')} "
+                    f"matched_skills={matched_skills}"
+                )
+
+            prompt = (
+                "Given the task skills and candidate scores, write one concise reason per candidate "
+                "why they are a good fit. Keep it under 25 words each.\n"
+                f"Task skills: {', '.join(req_names) if req_names else 'none'}\n"
+                "Candidates:\n" + "\n".join(candidate_lines)
+            )
+
+            resp = client.chat.completions.create(
+                model="gpt-4o-mini",
+                messages=[
+                    {"role": "system", "content": "You are a concise assistant for task assignment. Be brief and factual."},
+                    {"role": "user", "content": prompt}
+                ],
+                max_tokens=200,
+                temperature=0.2,
+            )
+            text = resp.choices[0].message.content.strip()
+            lines = [ln.strip() for ln in text.splitlines() if ln.strip()]
+            for i, ln in enumerate(lines):
+                if i < len(top):
+                    suggestions[i]["ai_reason"] = ln[:320]
+        except Exception as e:
+            logger.warning(f"AI rationale skipped: {e}")
+        return suggestions
 
 
     # ----------------- SUGGESTION ENTRYPOINT (READ-ONLY) ------------------ #
@@ -198,6 +257,7 @@ class AssignmentEngine:
                 scored_candidates.append(score_data)
 
             scored_candidates.sort(key=lambda x: x["total_score"], reverse=True)
+            scored_candidates = self._enrich_with_ai_reasoning(task_req, scored_candidates)
 
             return {
                 "task_id": str(task_id),

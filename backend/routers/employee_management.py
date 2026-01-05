@@ -70,6 +70,17 @@ async def create_task(
     7. ERROR HANDLING ✓
     """
 
+    """
+    Create a new task following the complete flow:
+    1. AUTHENTICATION & AUTHORIZATION ✓
+    2. INPUT VALIDATION ✓
+    3. DATABASE CONNECTIVITY CHECK ✓
+    4. DATA PREPARATION ✓
+    5. DATABASE INSERTION ✓
+    6. RESPONSE PROCESSING ✓
+    7. ERROR HANDLING ✓
+    """
+
     try:
         # 1. AUTHENTICATION & AUTHORIZATION
         # Get the authenticated user ID from Supabase
@@ -133,6 +144,9 @@ async def create_task(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 detail="Task creation failed - no data returned from database"
             )
+
+        # Assignment creation is now handled by frontend via separate API call
+        # This allows for better error handling and separation of concerns
 
         # 6. RESPONSE PROCESSING
         task_result = response.data[0]
@@ -347,13 +361,18 @@ async def create_employee(
             else:
                 # User doesn't have a profile - create one
                 try:
+                    # Process skill_vector from comma-separated string to array (same logic as tasks)
+                    skill_vector_array = []
+                    if employee.skill_vector and employee.skill_vector.strip():
+                        skill_vector_array = [skill.strip() for skill in employee.skill_vector.split(',') if skill.strip()]
+
                     employee_data = {
                         'auth_id': employee_id,
                         'email': employee.email,
                         'name': employee.name,
                         'role': 'employee',
                         'profile_picture': employee.profile_picture,
-                        'skill_vector': None,  # Will be set later when skills are added
+                        'skill_vector': skill_vector_array if skill_vector_array else None,
                         'productivity_score': 0.0
                     }
 

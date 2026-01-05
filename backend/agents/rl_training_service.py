@@ -9,11 +9,17 @@ Handles:
 
 import logging
 import json
+import os
 from typing import Dict, Any, Optional
 from uuid import UUID
 from datetime import datetime
 import math
 from core.database import get_supabase_client
+
+try:
+    from openai import OpenAI
+except ImportError:
+    OpenAI = None
 
 logger = logging.getLogger(__name__)
 
@@ -25,7 +31,7 @@ class RLTrainingService:
     # ============ MAIN ENTRYPOINT (called when task is completed) ============ #
 
     async def submit_feedback(
-        self,
+        self, 
         assignment_id: UUID,
         actual_hours: float,
         predicted_hours: float,
@@ -78,6 +84,10 @@ class RLTrainingService:
             )
 
             reward = reward_obj["total"]
+
+            ai_summary = self._maybe_ai_summary(reward_obj, task_id, user_id)
+            if ai_summary:
+                reward_obj["ai_summary"] = ai_summary
 
             # store feedback in assignments table itself (no extra table needed)
             # Schema has 'notes' as TEXT, so we stringify the reward details
@@ -139,6 +149,38 @@ class RLTrainingService:
             "accuracy": r5_accuracy,
             "satisfaction": r6_satisfaction
         }
+
+    def _maybe_ai_summary(self, reward_obj: Dict[str, Any], task_id: UUID, user_id: UUID) -> Optional[str]:
+        """
+        Optionally summarize the reward in a short sentence using OpenAI.
+        Falls back silently if OpenAI or API key is unavailable.
+        """
+        if OpenAI is None or not os.getenv("OPENAI_API_KEY"):
+            return None
+
+        try:
+            client = OpenAI(api_key=os.environ["OPENAI_API_KEY"])
+            content = (
+                "Summarize this task outcome in one concise sentence for a manager. "
+                "Mention speed/quality/satisfaction briefly. "
+                f"Reward total: {reward_obj.get('total', 0):.3f}, "
+                f"speed: {reward_obj.get('speed', 0):.3f}, "
+                f"quality: {reward_obj.get('quality', 0):.3f}, "
+                f"satisfaction: {reward_obj.get('satisfaction', 0):.3f}."
+            )
+            resp = client.chat.completions.create(
+                model="gpt-4o-mini",
+                messages=[
+                    {"role": "system", "content": "You are a concise assistant for task performance summaries."},
+                    {"role": "user", "content": content}
+                ],
+                max_tokens=80,
+                temperature=0.2,
+            )
+            return resp.choices[0].message.content.strip()
+        except Exception as e:
+            logger.warning(f"AI summary skipped: {e}")
+            return None
 
 
     # ============ POLICY UPDATE (where RL happens) ============ #

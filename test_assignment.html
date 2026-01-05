@@ -1,0 +1,71 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Test Assignment Creation</title>
+    <style>
+        body { font-family: Arial, sans-serif; margin: 20px; }
+        button { padding: 10px 20px; margin: 10px; cursor: pointer; }
+        .result { margin: 20px; padding: 10px; border: 1px solid #ccc; }
+        .success { background-color: #d4edda; border-color: #c3e6cb; }
+        .error { background-color: #f8d7da; border-color: #f5c6cb; }
+    </style>
+</head>
+<body>
+    <h1>Test Assignment Creation</h1>
+
+    <button onclick="checkAssignments()">Check Current Assignments</button>
+    <button onclick="testDirectAssignment()">Test Direct Assignment Creation</button>
+    <button onclick="testSimpleAssignment()">Test Simple Assignment Creation</button>
+
+    <div id="results"></div>
+
+    <script>
+        const API_BASE = 'http://localhost:8000';
+
+        function addResult(title, content, isSuccess = true) {
+            const results = document.getElementById('results');
+            const div = document.createElement('div');
+            div.className = `result ${isSuccess ? 'success' : 'error'}`;
+            div.innerHTML = `<h3>${title}</h3><pre>${JSON.stringify(content, null, 2)}</pre>`;
+            results.appendChild(div);
+        }
+
+        async function checkAssignments() {
+            try {
+                const response = await fetch(`${API_BASE}/api/check-assignments`);
+                const data = await response.json();
+                addResult('Current Assignments Status', data);
+            } catch (error) {
+                addResult('Check Assignments Error', {error: error.message}, false);
+            }
+        }
+
+        async function testDirectAssignment() {
+            try {
+                const response = await fetch(`${API_BASE}/api/test-direct-assignment`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' }
+                });
+                const data = await response.json();
+                addResult('Direct Assignment Test', data);
+            } catch (error) {
+                addResult('Direct Assignment Test Error', {error: error.message}, false);
+            }
+        }
+
+        async function testSimpleAssignment() {
+            try {
+                const response = await fetch(`${API_BASE}/api/test-create-assignment`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' }
+                });
+                const data = await response.json();
+                addResult('Simple Assignment Test', data);
+            } catch (error) {
+                addResult('Simple Assignment Test Error', {error: error.message}, false);
+            }
+        }
+    </script>
+</body>
+</html>
+
