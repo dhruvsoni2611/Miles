@@ -1,33 +1,50 @@
 import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
-import { SkillsSelection } from '../components';
+import { Sidebar, SkillsSelection } from '../components';
 import DatePicker from 'react-datepicker';
 import 'react-datepicker/dist/react-datepicker.css';
 
-// Calendar Component for Due Date Selection
-const CalendarDatePicker = ({ selectedDate, onDateChange, placeholder = "Select due date" }) => {
-  return (
-    <div className="relative">
-      <DatePicker
-        selected={selectedDate ? new Date(selectedDate) : null}
-        onChange={(date) => onDateChange(date ? date.toISOString().split('T')[0] : '')}
-        minDate={new Date()}
-        dateFormat="yyyy-MM-dd"
-        placeholderText={placeholder}
-        className="w-full px-4 py-2 pl-10 bg-white border border-black rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 text-black transition-colors"
-        calendarClassName="custom-calendar"
-      />
-      <svg className="w-5 h-5 text-gray-400 absolute left-3 top-2.5 z-10" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" />
-      </svg>
-    </div>
-  );
+// Status icon helper
+const getStatusIcon = (status) => {
+  switch (status) {
+    case 'assigned':
+    case 'todo':
+      return '📋';
+    case 'in_progress':
+      return '⚡';
+    case 'review':
+    case 'in_review':
+      return '👁️';
+    case 'completed':
+    case 'done':
+      return '✅';
+    case 'overdue':
+      return '🚨';
+    default:
+      return '📋';
+  }
+};
+
+// Status color helper
+const getStatusColor = (status) => {
+  switch (status) {
+    case 'completed':
+    case 'done':
+      return 'text-green-600';
+    case 'in_progress':
+      return 'text-yellow-600';
+    case 'review':
+    case 'in_review':
+      return 'text-purple-600';
+    case 'overdue':
+      return 'text-red-600';
+    default:
+      return 'text-gray-600';
+  }
 };
 
 const Dashboard = () => {
-  const [loading, setLoading] = useState(true);
-  const [projects, setProjects] = useState([]);
   const navigate = useNavigate();
   const { logout, ensureValidSession, isAuthenticated, loading: authLoading, user } = useAuth();
 
@@ -36,77 +53,84 @@ const Dashboard = () => {
   const [tasksLoading, setTasksLoading] = useState(true);
   const [tasksError, setTasksError] = useState(null);
 
-  // Managed employees state
-  const [managedEmployees, setManagedEmployees] = useState([]);
-  const [employeesLoading, setEmployeesLoading] = useState(false);
-  const [employeesError, setEmployeesError] = useState(null);
+  // View mode state
+  const [viewMode, setViewMode] = useState('created'); // 'created' or 'assigned'
 
-  // Modal states
+  // Drag and drop state
+  const [draggedTask, setDraggedTask] = useState(null);
+  const [dragOverStatus, setDragOverStatus] = useState(null);
+
+  // Task creation modal state
   const [showTaskModal, setShowTaskModal] = useState(false);
-  const [showEmployeeModal, setShowEmployeeModal] = useState(false);
-
-  // New employee form
-  const [newEmployee, setNewEmployee] = useState({
-    email: '',
-    name: '',
-    profile_picture: '',
-    skill_vector: []
-  });
-
-  // New task form
   const [newTask, setNewTask] = useState({
     title: '',
     description: '',
-    project_id: '',
-    priority: 'medium',
-    difficulty_level: 1,
+    priority_score: 2, // medium
+    difficulty_score: 3, // medium
     required_skills: [],
     status: 'todo',
-    assigned_to: '',
-    due_date: ''
+    due_date: null, // Changed to null for DatePicker
+    project_id: '',
+    assigned_to: '' // Employee assignment
   });
+  const [taskCreating, setTaskCreating] = useState(false);
 
+  // Assignable employees state
+  const [assignableEmployees, setAssignableEmployees] = useState([]);
+  const [employeesLoading, setEmployeesLoading] = useState(false);
 
-  // Fetch managed employees from API
-  const fetchManagedEmployees = async () => {
+  // Task assignment modal state
+  const [showAssignModal, setShowAssignModal] = useState(false);
+  const [taskToAssign, setTaskToAssign] = useState(null);
+  const [assigningTask, setAssigningTask] = useState(false);
+
+  useEffect(() => {
+    // Only check auth after AuthContext has finished loading
+    if (!authLoading) {
+      checkAuth();
+    }
+  }, [authLoading]);
+
+  const checkAuth = async () => {
     try {
-      setEmployeesLoading(true);
-      setEmployeesError(null);
-
-      // Ensure we have a valid token
-      let token;
-      try {
-        token = await ensureValidSession();
-      } catch (authError) {
-        console.error('Authentication error:', authError);
-        setEmployeesError('Please login to view employees');
-        setManagedEmployees([]);
-        setEmployeesLoading(false);
+      // Check if user is authenticated via AuthContext
+      if (!isAuthenticated()) {
+        console.log('Dashboard: No authenticated user, redirecting to login');
+        navigate('/login');
         return;
       }
 
-      const response = await fetch('http://localhost:8000/api/employees/managed', {
-        headers: {
-          'Authorization': `Bearer ${token}`,
-        },
-      });
-
-      if (!response.ok) {
-        throw new Error(`Failed to fetch employees: ${response.status}`);
+      // Check user role - allow managers and admins to access dashboard
+      if (!user || (user.role !== 'manager' && user.role !== 'admin')) {
+        console.log('Dashboard: User does not have required role (manager/admin)');
+        alert('Access denied. Only managers and administrators can access the dashboard.');
+        navigate('/login');
+        return;
       }
 
-      const data = await response.json();
-      setManagedEmployees(data.employees || []);
+      console.log('Dashboard: Authentication successful for user:', user.email, 'role:', user.role);
+
+      // Fetch tasks based on view mode
+      fetchTasks();
+
     } catch (error) {
-      console.error('Error fetching managed employees:', error);
-      setEmployeesError(error.message);
-      setManagedEmployees([]);
-    } finally {
-      setEmployeesLoading(false);
+      console.error('Dashboard: Auth check error:', error);
+      alert('Authentication failed. Please login again.');
+      navigate('/login');
     }
   };
 
-  // Fetch tasks from API
+  const handleLogout = async () => {
+    try {
+      await logout();
+      navigate('/login');
+    } catch (error) {
+      console.error('Logout error:', error);
+      navigate('/login');
+    }
+  };
+
+  // Fetch tasks based on current view mode
   const fetchTasks = async () => {
     try {
       setTasksLoading(true);
@@ -124,7 +148,12 @@ const Dashboard = () => {
         return;
       }
 
-      const response = await fetch('http://localhost:8000/api/tasks', {
+      // Choose API endpoint based on view mode
+      const endpoint = viewMode === 'created'
+        ? 'http://localhost:8000/api/tasks/created'  // tasks I created
+        : 'http://localhost:8000/api/tasks';         // tasks assigned to me
+
+      const response = await fetch(endpoint, {
         headers: {
           'Authorization': `Bearer ${token}`,
         },
@@ -135,19 +164,58 @@ const Dashboard = () => {
       }
 
       const data = await response.json();
-      setTasks(data.tasks || []);
+      const userTasks = data.tasks || [];
+
+      setTasks(userTasks);
     } catch (error) {
       console.error('Error fetching tasks:', error);
       setTasksError(error.message);
-      setTasks([]); // Fallback to empty array
+      setTasks([]);
     } finally {
       setTasksLoading(false);
     }
   };
 
-  // Drag and drop state
-  const [draggedTask, setDraggedTask] = useState(null);
-  const [dragOverStatus, setDragOverStatus] = useState(null);
+  // Fetch assignable employees for task creation
+  const fetchAssignableEmployees = async () => {
+    try {
+      setEmployeesLoading(true);
+
+      const token = await ensureValidSession();
+
+      const response = await fetch('http://localhost:8000/api/employees/managed', {
+        headers: {
+          'Authorization': `Bearer ${token}`,
+        },
+      });
+
+      if (!response.ok) {
+        throw new Error(`Failed to fetch assignable employees: ${response.status}`);
+      }
+
+      const data = await response.json();
+      setAssignableEmployees(data.employees || []);
+    } catch (error) {
+      console.error('Error fetching assignable employees:', error);
+      setAssignableEmployees([]);
+    } finally {
+      setEmployeesLoading(false);
+    }
+  };
+
+  // Group tasks by status
+  const tasksByStatus = {
+    assigned: tasks.filter(task => task.status === 'todo' || task.status === 'assigned'),
+    in_progress: tasks.filter(task => task.status === 'in_progress'),
+    in_review: tasks.filter(task => task.status === 'review' || task.status === 'in_review'),
+    completed: tasks.filter(task => task.status === 'completed' || task.status === 'done'),
+    overdue: tasks.filter(task => {
+      if (!task.due_date) return false;
+      const dueDate = new Date(task.due_date);
+      const today = new Date();
+      return dueDate < today && task.status !== 'completed' && task.status !== 'done';
+    })
+  };
 
   // Drag and drop handlers
   const handleDragStart = (e, task) => {
@@ -238,164 +306,35 @@ const Dashboard = () => {
     }
   };
 
-  useEffect(() => {
-    // Only check auth after AuthContext has finished loading
-    if (!authLoading) {
-    checkAuth();
-    fetchProjects();
-    }
-  }, [authLoading]);
-
-  // Fetch tasks when user is authenticated
-  useEffect(() => {
-    if (user) {
-      fetchTasks();
-    }
-  }, [user]);
-
-  const fetchProjects = async () => {
-    try {
-      // For demo purposes, use hardcoded projects
-      // In production, this would fetch from: /api/projects
-      const demoProjects = [
-        { id: 'demo-project-1', name: 'Website Redesign' },
-        { id: 'demo-project-2', name: 'Mobile App Development' },
-        { id: 'demo-project-3', name: 'API Integration' },
-        { id: 'demo-project-4', name: 'Database Optimization' }
-      ];
-      setProjects(demoProjects);
-    } catch (error) {
-      console.error('Error fetching projects:', error);
-    }
-  };
-
-  const checkAuth = async () => {
-    try {
-      // Check if user is authenticated via AuthContext
-      if (!isAuthenticated()) {
-        console.log('Dashboard: No authenticated user, redirecting to login');
-        navigate('/login');
-        return;
-      }
-
-      // Check user role - allow managers and admins to access dashboard
-      if (!user || (user.role !== 'manager' && user.role !== 'admin')) {
-        console.log('Dashboard: User does not have required role (manager/admin)');
-        alert('Access denied. Only managers and administrators can access the dashboard.');
-        navigate('/login');
-        return;
-      }
-
-      console.log('Dashboard: Authentication successful for user:', user.email, 'role:', user.role);
-
-    } catch (error) {
-      console.error('Dashboard: Auth check error:', error);
-      alert('Authentication failed. Please login again.');
-      navigate('/login');
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  const handleLogout = async () => {
-    try {
-      // Demo mode: Just redirect without actual logout
-      console.log('Demo: Logging out');
-      navigate('/login');
-
-      /*
-      // Production logout (uncomment when Supabase is configured):
-      await logout();
-      navigate('/login');
-      */
-    } catch (error) {
-      console.error('Logout error:', error);
-      navigate('/login');
-    }
-  };
-
-  const handleAddTask = () => {
-    // Check if user is authenticated
-    if (!isAuthenticated()) {
-      alert('Please login to add tasks');
-      navigate('/login');
-      return;
-    }
-
-    // Check if user is admin
-    if (user?.role !== 'admin') {
-      alert('Only administrators can add tasks.');
-      return;
-    }
-
-    // Fetch managed employees when opening the modal
-    fetchManagedEmployees();
-    setShowTaskModal(true);
-  };
-
-  const handleAddEmployee = () => {
-    // Check if user is authenticated
-    if (!isAuthenticated()) {
-      alert('Please login to add employees');
-      navigate('/login');
-      return;
-    }
-
-    // Check if user is manager or admin
-    if (user?.role !== 'manager' && user?.role !== 'admin') {
-      alert('Only managers and administrators can add employees.');
-      return;
-    }
-
-    setShowEmployeeModal(true);
-  };
-
-  const handleTaskSubmit = async (e) => {
+  const handleCreateTask = async (e) => {
     e.preventDefault();
 
-    // Check if user is authenticated
-    if (!isAuthenticated()) {
-      alert('Please login to create tasks');
-      navigate('/login');
+    if (!newTask.title.trim()) {
+      alert('Task title is required');
       return;
     }
 
     try {
-      // Ensure user is authenticated and get valid token
-      let token;
-      try {
-        token = await ensureValidSession();
-      } catch (authError) {
-        console.error('Authentication error:', authError);
-        if (authError.message.includes('No active session')) {
-          alert('Your session has expired. Please login again.');
-          navigate('/login');
-          return;
-        }
-        throw new Error(`Authentication failed: ${authError.message}`);
-      }
+      setTaskCreating(true);
 
+      const token = await ensureValidSession();
+
+      // Prepare task data for API
       const taskData = {
-        title: newTask.title,
-        description: newTask.description,
-        project_id: newTask.project_id || null,
-        priority: newTask.priority, // Send as string, backend converts to int
-        difficulty_level: parseInt(newTask.difficulty_level),
-        required_skills: newTask.required_skills || [],
+        title: newTask.title.trim(),
+        description: newTask.description.trim(),
+        priority_score: newTask.priority_score,
+        difficulty_score: newTask.difficulty_score,
         status: newTask.status,
-        assigned_to: newTask.assigned_to || null,
-        due_date: newTask.due_date ? new Date(newTask.due_date).toISOString() : null
+        due_date: newTask.due_date ? newTask.due_date.toISOString() : null,
+        required_skills: [], // Can be extended later
+        assigned_to: newTask.assigned_to || null, // Include assignment if selected
+        rating_score: 0,
+        justified: false,
+        bonus: false
       };
 
-      console.log('Creating task with data:', taskData);
-      console.log('FRONTEND DEBUG: assigned_to raw value:', newTask.assigned_to);
-      console.log('FRONTEND DEBUG: assigned_to type:', typeof newTask.assigned_to);
-      console.log('FRONTEND DEBUG: assigned_to truthy:', !!newTask.assigned_to);
-      console.log('FRONTEND DEBUG: taskData.assigned_to:', taskData.assigned_to);
-
-      // STEP 1: Create the task
-      console.log('🚀 STEP 1: Creating task...');
-      const taskResponse = await fetch('http://localhost:8000/api/tasks', {
+      const response = await fetch('http://localhost:8000/api/tasks', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -404,220 +343,91 @@ const Dashboard = () => {
         body: JSON.stringify(taskData),
       });
 
-      if (!taskResponse.ok) {
-        let errorMessage = `Failed to create task (${taskResponse.status})`;
-
-        try {
-          const errorData = await taskResponse.json();
-          console.error('Task creation error:', errorData);
-          if (errorData.detail) {
-            if (Array.isArray(errorData.detail)) {
-              // Pydantic validation errors
-              errorMessage = errorData.detail.map(err => `${err.loc.join('.')}: ${err.msg}`).join('\n');
-            } else {
-              errorMessage = errorData.detail;
-            }
-          } else if (typeof errorData === 'object') {
-            // Handle different error response formats
-            errorMessage = JSON.stringify(errorData, null, 2);
-          }
-        } catch (parseError) {
-          // If we can't parse JSON, use the status text
-          errorMessage = `Failed to create task: ${taskResponse.status} ${taskResponse.statusText}`;
-        }
-
-        throw new Error(errorMessage);
+      if (!response.ok) {
+        const errorData = await response.json();
+        throw new Error(errorData.detail || `Failed to create task: ${response.status}`);
       }
 
-      const taskResult = await taskResponse.json();
-      console.log('✅ Task created successfully:', taskResult);
-
-      // STEP 2: Create assignment record if task has assignee
-      if (taskData.assigned_to) {
-        console.log('🚀 STEP 2: Creating assignment record...');
-
-        // Get current user ID from auth context
-        const currentUserId = user?.id;
-        if (!currentUserId) {
-          console.warn('⚠️ No current user ID available for assignment');
-          alert('Task created successfully, but could not create assignment record (user not authenticated).');
-          return;
-        }
-
-        const assignmentData = {
-          task_id: taskResult.data.id,        // REAL task ID from task creation response
-          user_id: taskData.assigned_to,       // Assignee from form data
-          assigned_by: currentUserId,          // Current user (manager) from auth
-          assigned_at: new Date().toISOString()
-        };
-
-        console.log('Assignment data being sent:', assignmentData);
-
-        try {
-          const assignmentResponse = await fetch('http://localhost:8000/api/assignments', {
-            method: 'POST',
-            headers: {
-              'Content-Type': 'application/json',
-              'Authorization': `Bearer ${token}`,
-            },
-            body: JSON.stringify(assignmentData),
-          });
-
-          if (!assignmentResponse.ok) {
-            const errorText = await assignmentResponse.text();
-            console.warn('⚠️ Task created but assignment failed:', errorText);
-            alert(`Task created successfully, but assignment record creation failed: ${assignmentResponse.status}`);
-          } else {
-            const assignmentResult = await assignmentResponse.json();
-            console.log('✅ Assignment created successfully:', assignmentResult);
-          }
-        } catch (assignmentError) {
-          console.warn('⚠️ Assignment creation error:', assignmentError);
-          alert('Task created successfully, but assignment record creation failed.');
-        }
-      }
+      const createdTaskResponse = await response.json();
+      console.log('Task created successfully:', createdTaskResponse);
 
       // Reset form and close modal
       setNewTask({
         title: '',
         description: '',
-        project_id: '',
-        priority: 'medium',
-        difficulty_level: 1,
+        priority_score: 2,
+        difficulty_score: 3,
         required_skills: [],
         status: 'todo',
-        assigned_to: '',
-        due_date: ''
+        due_date: null,
+        project_id: '',
+        assigned_to: ''
       });
       setShowTaskModal(false);
 
-      // Show success message
-      alert('Task and assignment processing completed! Check console for details.');
+      // Refresh tasks list
+      await fetchTasks();
+
+      const assignmentMessage = newTask.assigned_to
+        ? 'Task created and assigned successfully!'
+        : 'Task created successfully!';
+      alert(assignmentMessage);
 
     } catch (error) {
       console.error('Error creating task:', error);
       alert(`Failed to create task: ${error.message}`);
+    } finally {
+      setTaskCreating(false);
     }
   };
 
-  const handleEmployeeSubmit = async (e) => {
-    e.preventDefault();
-
-    // Check if user is authenticated
-    if (!isAuthenticated()) {
-      alert('Please login to create employees');
-      navigate('/login');
+  // Handle task assignment
+  const handleAssignTask = async (taskId, employeeId) => {
+    if (!employeeId) {
+      alert('Please select an employee');
       return;
     }
 
     try {
-      // Ensure user is authenticated and get valid token
-      let token;
-      try {
-        token = await ensureValidSession();
-      } catch (authError) {
-        console.error('Authentication error:', authError);
-        if (authError.message.includes('No active session')) {
-          alert('Your session has expired. Please login again.');
-          navigate('/login');
-          return;
-        }
-        throw new Error(`Authentication failed: ${authError.message}`);
-      }
+      setAssigningTask(true);
 
-      const employeeData = {
-        email: newEmployee.email,
-        name: newEmployee.name,
-        profile_picture: newEmployee.profile_picture || null,
-        skill_vector: newEmployee.skill_vector.length > 0 ? newEmployee.skill_vector.join(', ') : ''
-      };
+      const token = await ensureValidSession();
 
-      console.log('Creating employee with data:', employeeData);
-
-      // Make authenticated API call to backend
-      const response = await fetch('http://localhost:8000/api/employees', {
-        method: 'POST',
+      const response = await fetch(`http://localhost:8000/api/tasks/${taskId}/assign`, {
+        method: 'PUT',
         headers: {
           'Content-Type': 'application/json',
-          'Authorization': `Bearer ${token}`
+          'Authorization': `Bearer ${token}`,
         },
-        body: JSON.stringify(employeeData),
+        body: JSON.stringify({
+          employee_id: employeeId
+        }),
       });
 
       if (!response.ok) {
-        let errorMessage = `Failed to create employee (${response.status})`;
-
-        try {
-          const errorData = await response.json();
-          if (errorData.detail) {
-            errorMessage = errorData.detail;
-          } else if (typeof errorData === 'object') {
-            errorMessage = JSON.stringify(errorData, null, 2);
-          }
-        } catch (parseError) {
-          errorMessage = `Failed to create employee: ${response.status} ${response.statusText}`;
-        }
-
-        throw new Error(errorMessage);
+        const errorData = await response.json();
+        throw new Error(errorData.detail || `Failed to assign task: ${response.status}`);
       }
 
-      const createdEmployee = await response.json();
-      console.log('Employee created successfully:', createdEmployee);
+      const result = await response.json();
+      console.log('Task assigned successfully:', result);
 
-      // Reset form and close modal
-      setNewEmployee({
-        email: '',
-        name: '',
-        profile_picture: '',
-        skill_vector: []
-      });
-      setShowEmployeeModal(false);
+      // Close modal and refresh tasks
+      setShowAssignModal(false);
+      setTaskToAssign(null);
+      await fetchTasks();
 
-      // Show success message
-      alert('Employee created successfully! Check console for employee data.');
+      alert('Task assigned successfully!');
 
     } catch (error) {
-      console.error('Error creating employee:', error);
-      alert(`Failed to create employee: ${error.message}`);
+      console.error('Error assigning task:', error);
+      alert(`Failed to assign task: ${error.message}`);
+    } finally {
+      setAssigningTask(false);
     }
   };
 
-
-
-  // Group tasks by status
-  const tasksByStatus = {
-    assigned: tasks.filter(task => task.status === 'assigned' || task.status === 'todo'),
-    in_progress: tasks.filter(task => task.status === 'in_progress'),
-    in_review: tasks.filter(task => task.status === 'review'),
-    completed: tasks.filter(task => task.status === 'completed' || task.status === 'done'),
-    overdue: tasks.filter(task => task.is_overdue === true)
-  };
-
-  const getStatusColor = (status) => {
-    switch (status) {
-      case 'assigned':
-      case 'todo': return 'bg-blue-500/20 text-blue-300 border-blue-500/30';
-      case 'in_progress': return 'bg-yellow-500/20 text-yellow-300 border-yellow-500/30';
-      case 'in_review': return 'bg-purple-500/20 text-purple-300 border-purple-500/30';
-      case 'completed': return 'bg-green-500/20 text-green-300 border-green-500/30';
-      case 'overdue': return 'bg-red-500/20 text-red-300 border-red-500/30';
-      default: return 'bg-gray-500/20 text-gray-300 border-gray-500/30';
-    }
-  };
-
-  const getStatusIcon = (status) => {
-    switch (status) {
-      case 'assigned':
-      case 'todo': return '📋';
-      case 'in_progress': return '⚡';
-      case 'in_review': return '👁️';
-      case 'completed': return '✅';
-      case 'overdue': return '🚨';
-      default: return '📝';
-    }
-  };
-
-  if (loading || authLoading) {
+  if (authLoading) {
     return (
       <div className="min-h-screen bg-gray-50 flex items-center justify-center">
         <div className="bg-white rounded-lg shadow-sm border border-gray-200 p-8 text-center">
@@ -629,56 +439,58 @@ const Dashboard = () => {
   }
 
   return (
-    <div className="min-h-screen bg-gray-50">
+    <div className="min-h-screen bg-gray-50 flex">
+      {/* Sidebar */}
+      <Sidebar />
+
+      {/* Main Content */}
+      <div className="flex-1 flex flex-col">
         {/* Title Bar */}
         <div className="bg-white border-b border-gray-200 shadow-sm">
           <div className="w-full px-4 sm:px-6 lg:px-8 py-6">
             <div className="flex justify-between items-center">
               <div className="flex items-center space-x-4">
-                <div className="h-10 w-10 bg-blue-600 rounded-lg flex items-center justify-center">
-                  <svg className="h-6 w-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 21V5a2 2 0 00-2-2H7a2 2 0 00-2 2v16m14 0h2m-2 0h-5m-9 0H3m2 0h5M9 7h1m-1 4h1m4-4h1m-1 4h1m-5 10v-5a1 1 0 011-1h2a1 1 0 011 1v5m-4 0h4" />
-                  </svg>
-                </div>
-                <h1 className="text-2xl font-bold text-gray-900">WorkVillage</h1>
+                <h1 className="text-2xl font-bold text-gray-900">
+                  {viewMode === 'created' ? 'Tasks I Created' : 'My Tasks'}
+                </h1>
               </div>
 
-              <div className="flex items-center space-x-4">
-                <span className="text-gray-600">Welcome, {user?.name || user?.email?.split('@')[0]}</span>
-                <button
-                  onClick={() => navigate('/calendar')}
-                  className="px-4 py-2 bg-purple-600 hover:bg-purple-700 rounded-lg text-white transition-colors flex items-center space-x-2 font-medium"
-                >
-                  <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" />
-                  </svg>
-                  <span>Calendar</span>
-                </button>
-              </div>
-
-              {/* Action Buttons */}
               <div className="flex items-center space-x-3">
                 <button
-                  onClick={handleAddTask}
-                  className="px-4 py-2 bg-blue-600 hover:bg-blue-700 rounded-lg text-white transition-colors flex items-center space-x-2 font-medium"
+                  onClick={() => {
+                    setViewMode('assigned');
+                    fetchTasks();
+                  }}
+                  className={`px-4 py-2 rounded-lg text-white transition-colors font-medium ${
+                    viewMode === 'assigned'
+                      ? 'bg-blue-600 hover:bg-blue-700'
+                      : 'bg-gray-500 hover:bg-gray-600'
+                  }`}
+                >
+                  My Tasks
+                </button>
+                <button
+                  onClick={() => {
+                    setViewMode('created');
+                    fetchTasks();
+                  }}
+                  className={`px-4 py-2 rounded-lg text-white transition-colors font-medium ${
+                    viewMode === 'created'
+                      ? 'bg-green-600 hover:bg-green-700'
+                      : 'bg-gray-500 hover:bg-gray-600'
+                  }`}
+                >
+                  Tasks I Created
+                </button>
+                <button
+                  onClick={() => {
+                    setShowTaskModal(true);
+                    fetchAssignableEmployees(); // Fetch employees when modal opens
+                  }}
+                  className="px-4 py-2 bg-purple-600 hover:bg-purple-700 rounded-lg text-white transition-colors font-medium flex items-center space-x-2"
                 >
                   <span>➕</span>
-                  <span>Add Task</span>
-                </button>
-
-                <button
-                  onClick={handleAddEmployee}
-                  className="px-4 py-2 bg-green-600 hover:bg-green-700 rounded-lg text-white transition-colors flex items-center space-x-2 font-medium"
-                >
-                  <span>👥</span>
-                  <span>Add Employee</span>
-                </button>
-
-                <button
-                  onClick={handleLogout}
-                  className="px-4 py-2 bg-gray-200 hover:bg-gray-300 rounded-lg text-gray-700 transition-colors font-medium"
-                >
-                  Logout
+                  <span>Create Task</span>
                 </button>
               </div>
             </div>
@@ -686,787 +498,718 @@ const Dashboard = () => {
         </div>
 
         {/* Dashboard Content */}
-        <div className="w-full px-4 sm:px-6 lg:px-8 py-8">
+        <div className="flex-1 p-6">
+          <div className="max-w-7xl mx-auto">
 
-          {/* Task Compartments Header */}
-          <div className="flex justify-between items-center mb-8">
-            <h2 className="text-3xl font-bold text-gray-900">Task Management</h2>
-            <div className="flex space-x-3">
-              <button
-                onClick={handleAddTask}
-                className="px-6 py-3 bg-blue-600 hover:bg-blue-700 rounded-lg text-white transition-colors flex items-center space-x-2 font-medium shadow-sm"
-              >
-                <span>➕</span>
-                <span>Add Task</span>
-              </button>
-
-              <button
-                onClick={handleAddEmployee}
-                className="px-6 py-3 bg-green-600 hover:bg-green-700 rounded-lg text-white transition-colors flex items-center space-x-2 font-medium shadow-sm"
-              >
-                <span>👥</span>
-                <span>Add Employee</span>
-              </button>
-            </div>
-          </div>
-
-          {/* Loading and Error States */}
-          {tasksLoading && (
-            <div className="text-center py-12">
-              <div className="animate-spin rounded-full h-12 w-12 border-2 border-blue-200 border-t-blue-600 mx-auto mb-4"></div>
-              <p className="text-gray-600 text-lg">Loading your tasks...</p>
-            </div>
-          )}
-
-          {tasksError && (
-            <div className="bg-white rounded-lg shadow-sm border border-red-200 p-6 mb-6">
-              <div className="flex items-start">
-                <div className="flex-shrink-0">
-                  <svg className="h-6 w-6 text-red-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
-                  </svg>
+            {/* Tasks Display */}
+            {user?.role === 'admin' && (
+              <>
+                <div className="flex justify-between items-center mb-8">
+                  <h2 className="text-3xl font-bold text-gray-900">
+                    {viewMode === 'created' ? 'Tasks I Created' : 'My Assigned Tasks'}
+                  </h2>
                 </div>
-                <div className="ml-3 flex-1">
-                  <h3 className="text-sm font-medium text-red-800">
-                    Failed to load tasks
-                  </h3>
-                  <div className="mt-1 text-sm text-red-600">
-                    <p>{tasksError}</p>
-                  </div>
-                  <div className="mt-3">
-                    <button
-                      onClick={fetchTasks}
-                      className="bg-red-100 hover:bg-red-200 text-red-700 px-3 py-1 rounded text-sm transition-colors border border-red-300"
-                    >
-                      Try Again
-                    </button>
-                  </div>
-                </div>
-              </div>
-            </div>
-          )}
 
-          {/* Only show task compartments when not loading and no errors */}
-          {!tasksLoading && !tasksError && (
-            <>
-              {/* Task Compartments */}
-              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5 gap-6">
-            {/* Assigned Tasks */}
-            <div
-              className={`bg-white rounded-lg shadow-sm border border-gray-200 p-6 transition-all ${
-                dragOverStatus === 'assigned' ? 'border-blue-400 bg-blue-50 shadow-lg' : ''
-              }`}
-              onDragOver={handleDragOver}
-              onDragEnter={() => handleDragEnter('assigned')}
-              onDragLeave={handleDragLeave}
-              onDrop={(e) => handleDrop(e, 'todo')}
-            >
-              <div className="flex items-center justify-between mb-4">
-                <h3 className="text-lg font-semibold text-gray-900 flex items-center">
-                  <span className="mr-2">{getStatusIcon('assigned')}</span>
-                  Assigned Tasks
-                </h3>
-                <span className="px-2 py-1 bg-blue-100 text-blue-800 rounded-full text-sm font-medium">
-                  {tasksByStatus.assigned.length}
-                </span>
-              </div>
-
-              <div className="space-y-3">
-                {tasksByStatus.assigned.map((task) => (
-                  <div
-                    key={task.id}
-                    draggable
-                    onDragStart={(e) => handleDragStart(e, task)}
-                    onDragEnd={handleDragEnd}
-                    className="bg-gray-50 rounded-lg p-3 border border-gray-200 hover:shadow-md transition-all cursor-move"
-                  >
-                    <h4 className="text-gray-900 font-medium text-sm mb-2">{task.title}</h4>
-                    <div className="flex items-center justify-between text-xs text-gray-500 mb-3">
-                      <span className="capitalize font-medium">
-                        {task.priority === 'urgent' && '🔴 '}
-                        {task.priority === 'high' && '🟠 '}
-                        {task.priority === 'medium' && '🟡 '}
-                        {task.priority === 'low' && '🟢 '}
-                        {task.priority}
-                      </span>
-                      {task.created_at && (
-                        <span>
-                          📅 {new Date(task.created_at).toLocaleDateString()}
-                        </span>
-                      )}
-                    </div>
-
-                    {/* Task Actions */}
-                    <div className="flex items-center justify-end space-x-2">
-                      {(task.status === 'assigned' || task.status === 'in_progress') && (
-                        <button
-                          onClick={() => alert(`Mark complete: ${task.title}`)}
-                          className="px-2 py-1 bg-green-100 hover:bg-green-200 text-green-700 rounded text-xs transition-colors font-medium"
-                        >
-                          Complete
-                        </button>
-                      )}
-                      <button
-                        onClick={() => alert(`Edit task: ${task.title}`)}
-                        className="px-2 py-1 bg-blue-100 hover:bg-blue-200 text-blue-700 rounded text-xs transition-colors font-medium"
-                      >
-                        Edit
-                      </button>
-                      <button
-                        onClick={() => alert(`Delete task: ${task.title}`)}
-                        className="px-2 py-1 bg-red-100 hover:bg-red-200 text-red-700 rounded text-xs transition-colors font-medium"
-                      >
-                        Delete
-                      </button>
-                    </div>
-                  </div>
-                ))}
-
-                {tasksByStatus.assigned.length === 0 && (
-                  <div className="text-center py-8 text-white/40">
-                    <div className="text-2xl mb-2">{getStatusIcon('assigned')}</div>
-                    <p className="text-sm">No assigned tasks</p>
+                {/* Loading State */}
+                {tasksLoading && (
+                  <div className="text-center py-12">
+                    <div className="animate-spin rounded-full h-12 w-12 border-2 border-blue-200 border-t-blue-600 mx-auto mb-4"></div>
+                    <p className="text-gray-600 text-lg">Loading your tasks...</p>
                   </div>
                 )}
-              </div>
-            </div>
 
-            {/* In Progress */}
-            <div
-              className={`bg-white rounded-lg shadow-sm border border-gray-200 p-6 transition-all ${
-                dragOverStatus === 'in_progress' ? 'border-yellow-400 bg-yellow-50 shadow-lg' : ''
-              }`}
-              onDragOver={handleDragOver}
-              onDragEnter={() => handleDragEnter('in_progress')}
-              onDragLeave={handleDragLeave}
-              onDrop={(e) => handleDrop(e, 'in_progress')}
-            >
-              <div className="flex items-center justify-between mb-4">
-                <h3 className="text-lg font-semibold text-gray-900 flex items-center">
-                  <span className="mr-2">{getStatusIcon('in_progress')}</span>
-                  In Progress
-                </h3>
-                <span className="px-2 py-1 bg-yellow-100 text-yellow-800 rounded-full text-sm font-medium">
-                  {tasksByStatus.in_progress.length}
-                </span>
-              </div>
+                {/* Error State */}
+                {tasksError && (
+                  <div className="bg-white rounded-lg shadow-sm border border-red-200 p-6 mb-6">
+                    <div className="flex items-start">
+                      <div className="flex-shrink-0">
+                        <svg className="h-6 w-6 text-red-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                        </svg>
+                      </div>
+                      <div className="ml-3 flex-1">
+                        <h3 className="text-sm font-medium text-red-800">
+                          Failed to load tasks
+                        </h3>
+                        <div className="mt-1 text-sm text-red-600">
+                          <p>{tasksError}</p>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                )}
 
-              <div className="space-y-3">
-                {tasksByStatus.in_progress.map((task) => (
-                  <div
-                    key={task.id}
-                    draggable
-                    onDragStart={(e) => handleDragStart(e, task)}
-                    onDragEnd={handleDragEnd}
-                    className="bg-gray-50 rounded-lg p-3 border border-gray-200 hover:shadow-md transition-all cursor-move"
-                  >
-                    <h4 className="text-gray-900 font-medium text-sm mb-2">{task.title}</h4>
-                    <div className="flex items-center justify-between text-xs text-gray-500 mb-2">
-                      <span className="capitalize font-medium">
-                        {task.priority === 'urgent' && '🔴 '}
-                        {task.priority === 'high' && '🟠 '}
-                        {task.priority === 'medium' && '🟡 '}
-                        {task.priority === 'low' && '🟢 '}
-                        {task.priority}
-                      </span>
-                      <div className="flex items-center space-x-1">
-                        <div className="w-16 bg-gray-200 rounded-full h-1">
+                {/* Task Compartments */}
+                {!tasksLoading && !tasksError && (
+                  <>
+                    {tasks.length === 0 ? (
+                      <div className="bg-white rounded-lg shadow-sm border border-gray-200 p-12 text-center">
+                        <div className="text-4xl mb-4">📋</div>
+                        <h3 className="text-lg font-medium text-gray-900 mb-2">
+                          {viewMode === 'created' ? 'No tasks created yet' : 'No tasks assigned to you'}
+                        </h3>
+                        <p className="text-gray-600 mb-4">
+                          {viewMode === 'created'
+                            ? 'Tasks you create will appear here.'
+                            : 'Tasks assigned to you will appear here.'
+                          }
+                        </p>
+                        {viewMode === 'created' && (
+                          <p className="text-sm text-gray-500">Use the "My Tasks" view to see tasks assigned to you.</p>
+                        )}
+                      </div>
+                    ) : (
+                      <>
+                        {/* Task Compartments */}
+                        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5 gap-6">
+                          {/* Assigned Tasks */}
                           <div
-                            className="bg-yellow-500 h-1 rounded-full"
-                            style={{ width: `${task.progress || 0}%` }}
-                          ></div>
-                        </div>
-                        <span className="font-medium">{task.progress || 0}%</span>
-                      </div>
-                    </div>
-                  </div>
-                ))}
-
-                {tasksByStatus.in_progress.length === 0 && (
-                  <div className="text-center py-8 text-white/40">
-                    <div className="text-2xl mb-2">{getStatusIcon('in_progress')}</div>
-                    <p className="text-sm">No tasks in progress</p>
-                  </div>
-                )}
-              </div>
-            </div>
-
-            {/* In Review */}
-            <div
-              className={`bg-white rounded-lg shadow-sm border border-gray-200 p-6 transition-all ${
-                dragOverStatus === 'review' ? 'border-purple-400 bg-purple-50 shadow-lg' : ''
-              }`}
-              onDragOver={handleDragOver}
-              onDragEnter={() => handleDragEnter('review')}
-              onDragLeave={handleDragLeave}
-              onDrop={(e) => handleDrop(e, 'review')}
-            >
-              <div className="flex items-center justify-between mb-4">
-                <h3 className="text-lg font-semibold text-gray-900 flex items-center">
-                  <span className="mr-2">{getStatusIcon('in_review')}</span>
-                  In Review
-                </h3>
-                <span className="px-2 py-1 bg-purple-100 text-purple-800 rounded-full text-sm font-medium">
-                  {tasksByStatus.in_review.length}
-                </span>
-              </div>
-
-              <div className="space-y-3">
-                {tasksByStatus.in_review.map((task) => (
-                  <div
-                    key={task.id}
-                    draggable
-                    onDragStart={(e) => handleDragStart(e, task)}
-                    onDragEnd={handleDragEnd}
-                    className="bg-gray-50 rounded-lg p-3 border border-gray-200 hover:shadow-md transition-all cursor-move"
-                  >
-                    <h4 className="text-gray-900 font-medium text-sm mb-2">{task.title}</h4>
-                    <div className="flex items-center justify-between text-xs text-gray-500">
-                      <span className="capitalize font-medium">
-                        {task.priority === 'urgent' && '🔴 '}
-                        {task.priority === 'high' && '🟠 '}
-                        {task.priority === 'medium' && '🟡 '}
-                        {task.priority === 'low' && '🟢 '}
-                        {task.priority}
-                      </span>
-                      <span className="font-medium">⏳ Awaiting review</span>
-                    </div>
-                  </div>
-                ))}
-
-                {tasksByStatus.in_review.length === 0 && (
-                  <div className="text-center py-8 text-white/40">
-                    <div className="text-2xl mb-2">{getStatusIcon('in_review')}</div>
-                    <p className="text-sm">No tasks in review</p>
-                  </div>
-                )}
-              </div>
-            </div>
-
-            {/* Completed */}
-            <div
-              className={`bg-white rounded-lg shadow-sm border border-gray-200 p-6 transition-all ${
-                dragOverStatus === 'done' ? 'border-green-400 bg-green-50 shadow-lg' : ''
-              }`}
-              onDragOver={handleDragOver}
-              onDragEnter={() => handleDragEnter('done')}
-              onDragLeave={handleDragLeave}
-              onDrop={(e) => handleDrop(e, 'done')}
-            >
-              <div className="flex items-center justify-between mb-4">
-                <h3 className="text-lg font-semibold text-gray-900 flex items-center">
-                  <span className="mr-2">{getStatusIcon('completed')}</span>
-                  Completed
-                </h3>
-                <span className="px-2 py-1 bg-green-100 text-green-800 rounded-full text-sm font-medium">
-                  {tasksByStatus.completed.length}
-                </span>
-              </div>
-
-              <div className="space-y-3">
-                {tasksByStatus.completed.map((task) => (
-                  <div
-                    key={task.id}
-                    draggable
-                    onDragStart={(e) => handleDragStart(e, task)}
-                    onDragEnd={handleDragEnd}
-                    className="bg-green-50 rounded-lg p-3 border border-green-200 hover:shadow-md transition-all cursor-move"
-                  >
-                    <h4 className="text-gray-900 font-medium text-sm mb-2 line-through opacity-75">{task.title}</h4>
-                    <div className="flex items-center justify-between text-xs text-gray-500">
-                      <span className="capitalize font-medium">
-                        {task.priority === 'urgent' && '🔴 '}
-                        {task.priority === 'high' && '🟠 '}
-                        {task.priority === 'medium' && '🟡 '}
-                        {task.priority === 'low' && '🟢 '}
-                        {task.priority}
-                      </span>
-                      <span className="font-medium text-green-600">✅ Done</span>
-                    </div>
-                  </div>
-                ))}
-
-                {tasksByStatus.completed.length === 0 && (
-                  <div className="text-center py-8 text-white/40">
-                    <div className="text-2xl mb-2">{getStatusIcon('completed')}</div>
-                    <p className="text-sm">No completed tasks</p>
-                  </div>
-                )}
-              </div>
-            </div>
-
-            {/* Overdue */}
-            <div className="bg-white rounded-lg shadow-sm border border-gray-200 p-6">
-              <div className="flex items-center justify-between mb-4">
-                <h3 className="text-lg font-semibold text-gray-900 flex items-center">
-                  <span className="mr-2">{getStatusIcon('overdue')}</span>
-                  Overdue
-                </h3>
-                <span className="px-2 py-1 bg-red-100 text-red-800 rounded-full text-sm font-medium">
-                  {tasksByStatus.overdue.length}
-                </span>
-              </div>
-
-              <div className="space-y-3">
-                {tasksByStatus.overdue.map((task) => (
-                  <div key={task.id} className="bg-red-50 rounded-lg p-3 border border-red-200 hover:shadow-md transition-shadow">
-                    <h4 className="text-gray-900 font-medium text-sm mb-2">{task.title}</h4>
-                    <div className="flex items-center justify-between text-xs text-gray-500 mb-2">
-                      <span className="capitalize font-medium">
-                        {task.priority === 'urgent' && '🔴 '}
-                        {task.priority === 'high' && '🟠 '}
-                        {task.priority === 'medium' && '🟡 '}
-                        {task.priority === 'low' && '🟢 '}
-                        {task.priority}
-                      </span>
-                      <span className="font-medium text-red-600">🚨 Overdue</span>
-                    </div>
-                    {task.deadline && (
-                      <div className="text-xs text-red-600 font-medium">
-                        Due: {new Date(task.deadline).toLocaleDateString()}
-                      </div>
-                    )}
-                  </div>
-                ))}
-
-                {tasksByStatus.overdue.length === 0 && (
-                  <div className="text-center py-8 text-white/40">
-                    <div className="text-2xl mb-2">{getStatusIcon('overdue')}</div>
-                    <p className="text-sm">No overdue tasks</p>
-                  </div>
-                )}
-              </div>
-            </div>
-          </div>
-            </>
-          )}
-
-          {/* Quick Stats */}
-          <div className="mt-8 grid grid-cols-2 md:grid-cols-4 gap-4">
-            <div className="bg-white rounded-lg shadow-sm border border-gray-200 p-4 text-center">
-              <div className="text-2xl font-bold text-gray-900">{tasks.length}</div>
-              <div className="text-sm text-gray-600">Total Tasks</div>
-            </div>
-            <div className="bg-white rounded-lg shadow-sm border border-gray-200 p-4 text-center">
-              <div className="text-2xl font-bold text-blue-600">{tasksByStatus.assigned.length}</div>
-              <div className="text-sm text-gray-600">Assigned</div>
-            </div>
-            <div className="bg-white rounded-lg shadow-sm border border-gray-200 p-4 text-center">
-              <div className="text-2xl font-bold text-yellow-600">{tasksByStatus.in_progress.length}</div>
-              <div className="text-sm text-gray-600">In Progress</div>
-            </div>
-            <div className="bg-white rounded-lg shadow-sm border border-gray-200 p-4 text-center">
-              <div className="text-2xl font-bold text-green-600">{tasksByStatus.completed.length}</div>
-              <div className="text-sm text-gray-600">Completed</div>
-            </div>
-          </div>
-
-          {/* Task Modal */}
-          {showTaskModal && (
-            <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-4">
-              <div className="bg-white w-full max-w-4xl max-h-[95vh] overflow-hidden rounded-2xl shadow-2xl">
-                {/* Header */}
-                <div className="bg-gradient-to-r from-blue-600 to-purple-600 px-6 py-4">
-                  <div className="flex justify-between items-center">
-                    <div className="flex items-center space-x-3">
-                      <div className="w-10 h-10 bg-white/20 rounded-full flex items-center justify-center">
-                        <svg className="w-6 h-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 6v6m0 0v6m0-6h6m-6 0H6" />
-                        </svg>
-                      </div>
-                      <div>
-                        <h2 className="text-xl font-bold text-white">Create New Task</h2>
-                        <p className="text-blue-100 text-sm">Fill in the details below</p>
-                      </div>
-                    </div>
-                    <button
-                      onClick={() => setShowTaskModal(false)}
-                      className="w-8 h-8 bg-white/20 hover:bg-white/30 rounded-full flex items-center justify-center text-white transition-colors"
-                    >
-                      ✕
-                    </button>
-                  </div>
-                </div>
-
-                {/* Form Content */}
-                <div className="overflow-y-auto max-h-[calc(95vh-120px)]">
-                  <form onSubmit={handleTaskSubmit} className="p-6 space-y-6">
-                    {/* Essential Information Card */}
-                    <div className="bg-gray-50 rounded-xl p-6 border border-gray-200">
-                      <div className="flex items-center space-x-2 mb-4">
-                        <svg className="w-5 h-5 text-blue-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
-                        </svg>
-                        <h3 className="text-lg font-semibold text-gray-900">Essential Information</h3>
-                      </div>
-
-                      {/* Title */}
-                      <div className="mb-4">
-                        <label className="block text-sm font-medium text-gray-700 mb-2">
-                          Task Title <span className="text-red-500">*</span>
-                        </label>
-                        <div className="relative">
-                          <input
-                            type="text"
-                            required
-                            value={newTask.title}
-                            onChange={(e) => setNewTask(prev => ({ ...prev, title: e.target.value }))}
-                            className="w-full px-4 py-3 pl-10 bg-white border border-black rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 text-black transition-colors"
-                            placeholder="Enter a clear, descriptive title"
-                          />
-                          <svg className="w-5 h-5 text-gray-400 absolute left-3 top-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 7h.01M7 3h5c.512 0 1.024.195 1.414.586l7 7a2 2 0 010 2.828l-7 7a2 2 0 01-2.828 0l-7-7A1.994 1.994 0 013 12V7a4 4 0 014-4z" />
-                          </svg>
-                        </div>
-                      </div>
-
-                      {/* Description */}
-                      <div>
-                        <label className="block text-sm font-medium text-gray-700 mb-2">
-                          Description
-                        </label>
-                        <textarea
-                          value={newTask.description}
-                          onChange={(e) => setNewTask(prev => ({ ...prev, description: e.target.value }))}
-                          className="w-full px-4 py-3 bg-white border border-black rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 text-black transition-colors resize-none"
-                          placeholder="Provide detailed information about this task..."
-                          rows="3"
-                        />
-                      </div>
-                    </div>
-
-                    {/* Task Details Grid */}
-                    <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                      {/* Priority & Difficulty Card */}
-                      <div className="bg-white border border-gray-200 rounded-xl p-6">
-                        <div className="flex items-center space-x-2 mb-4">
-                          <svg className="w-5 h-5 text-orange-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-2.5L13.732 4c-.77-.833-1.964-.833-2.732 0L4.082 16.5c-.77.833.192 2.5 1.732 2.5z" />
-                          </svg>
-                          <h3 className="text-lg font-semibold text-gray-900">Priority & Difficulty</h3>
-                        </div>
-
-                        <div className="space-y-4">
-                          <div>
-                            <label className="block text-sm font-medium text-gray-700 mb-2">
-                              Priority Level
-                            </label>
-                            <select
-                              value={newTask.priority}
-                              onChange={(e) => setNewTask(prev => ({ ...prev, priority: e.target.value }))}
-                              className="w-full px-3 py-2 bg-white border border-black rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 text-black transition-colors"
-                            >
-                              <option value="low">🟢 Low Priority</option>
-                              <option value="medium">🟡 Medium Priority</option>
-                              <option value="high">🟠 High Priority</option>
-                              <option value="urgent">🔴 Urgent Priority</option>
-                            </select>
-                          </div>
-
-                          <div>
-                            <label className="block text-sm font-medium text-gray-700 mb-2">
-                              Difficulty Level
-                            </label>
-                            <div className="relative">
-                              <input
-                                type="number"
-                                min="1"
-                                max="10"
-                                value={newTask.difficulty_level}
-                                onChange={(e) => setNewTask(prev => ({ ...prev, difficulty_level: e.target.value }))}
-                                className="w-full px-4 py-2 pl-10 bg-white border border-black rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 text-black transition-colors"
-                                placeholder="1-10"
-                              />
-                              <svg className="w-5 h-5 text-gray-400 absolute left-3 top-2.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z" />
-                              </svg>
+                            className={`bg-white rounded-lg shadow-sm border border-gray-200 p-6 transition-all ${
+                              dragOverStatus === 'assigned' ? 'border-blue-400 bg-blue-50 shadow-lg' : ''
+                            }`}
+                            onDragOver={handleDragOver}
+                            onDragEnter={() => handleDragEnter('assigned')}
+                            onDragLeave={handleDragLeave}
+                            onDrop={(e) => handleDrop(e, 'todo')}
+                          >
+                            <div className="flex items-center justify-between mb-4">
+                              <h3 className="text-lg font-semibold text-gray-900 flex items-center">
+                                <span className="mr-2">{getStatusIcon('assigned')}</span>
+                                Assigned Tasks
+                              </h3>
+                              <span className="px-2 py-1 bg-blue-100 text-blue-800 rounded-full text-sm font-medium">
+                                {tasksByStatus.assigned.length}
+                              </span>
                             </div>
-                          </div>
-                        </div>
-                      </div>
 
-                      {/* Assignment & Timeline Card */}
-                      <div className="bg-white border border-gray-200 rounded-xl p-6">
-                        <div className="flex items-center space-x-2 mb-4">
-                          <svg className="w-5 h-5 text-green-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
-                          </svg>
-                          <h3 className="text-lg font-semibold text-gray-900">Assignment & Timeline</h3>
-                        </div>
+                            <div className="space-y-3">
+                              {tasksByStatus.assigned.map((task) => (
+                                <div
+                                  key={task.id}
+                                  draggable
+                                  onDragStart={(e) => handleDragStart(e, task)}
+                                  onDragEnd={handleDragEnd}
+                                  className="bg-gray-50 rounded-lg p-3 border border-gray-200 hover:shadow-md transition-all cursor-move"
+                                >
+                                  <h4 className="text-gray-900 font-medium text-sm mb-2">{task.title}</h4>
+                                  <div className="flex items-center justify-between text-xs text-gray-500 mb-3">
+                                    <span className="capitalize font-medium">
+                                      {task.priority === 'urgent' && '🔴 '}
+                                      {task.priority === 'high' && '🟠 '}
+                                      {task.priority === 'medium' && '🟡 '}
+                                      {task.priority === 'low' && '🟢 '}
+                                      {task.priority}
+                                    </span>
+                                    {task.created_at && (
+                                      <span>
+                                        📅 {new Date(task.created_at).toLocaleDateString()}
+                                      </span>
+                                    )}
+                                  </div>
 
-                        <div className="space-y-4">
-                          <div>
-                            <label className="block text-sm font-medium text-gray-700 mb-2">
-                              Assign To
-                            </label>
-                            <div className="relative">
-                              <select
-                                value={newTask.assigned_to}
-                                onChange={(e) => setNewTask(prev => ({ ...prev, assigned_to: e.target.value }))}
-                                className="w-full px-4 py-2 pl-10 bg-white border border-black rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 text-black transition-colors"
-                              >
-                                <option value="">Select an employee (optional)</option>
-                                {managedEmployees.map((employee) => (
-                                  <option key={employee.auth_id} value={employee.auth_id}>
-                                    {employee.name} ({employee.email})
-                                  </option>
-                                ))}
-                              </select>
-                              <svg className="w-5 h-5 text-gray-400 absolute left-3 top-2.5 z-10" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z" />
-                              </svg>
-                            </div>
-                            {employeesLoading && (
-                              <p className="text-sm text-gray-500 mt-1">Loading employees...</p>
-                            )}
-                            {employeesError && (
-                              <p className="text-sm text-red-500 mt-1">Error loading employees: {employeesError}</p>
-                            )}
-                          </div>
+                                  <div className="flex items-center justify-between text-xs text-gray-500 mb-2">
+                                    <span className="font-medium">
+                                      👤 {task.assigned_to || 'Not assigned'}
+                                    </span>
+                                    {!task.assigned_to && viewMode === 'created' && (
+                                      <button
+                                        onClick={() => {
+                                          setTaskToAssign(task);
+                                          setShowAssignModal(true);
+                                          fetchAssignableEmployees();
+                                        }}
+                                        className="px-2 py-1 bg-blue-500 hover:bg-blue-600 text-white text-xs rounded transition-colors"
+                                      >
+                                        Assign
+                                      </button>
+                                    )}
+                                  </div>
 
-                          <div>
-                            <label className="block text-sm font-medium text-gray-700 mb-2">
-                              Due Date
-                            </label>
-                            <CalendarDatePicker
-                              selectedDate={newTask.due_date}
-                              onDateChange={(date) => setNewTask(prev => ({ ...prev, due_date: date }))}
-                              placeholder="Select due date"
-                            />
-                          </div>
-                        </div>
-                      </div>
-                    </div>
-
-                    {/* Additional Details */}
-                    <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                      {/* Project & Status Card */}
-                      <div className="bg-white border border-gray-200 rounded-xl p-6">
-                        <div className="flex items-center space-x-2 mb-4">
-                          <svg className="w-5 h-5 text-purple-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10" />
-                          </svg>
-                          <h3 className="text-lg font-semibold text-gray-900">Project & Status</h3>
-                        </div>
-
-                        <div className="space-y-4">
-                          <div>
-                            <label className="block text-sm font-medium text-gray-700 mb-2">
-                              Project
-                            </label>
-                            <select
-                              value={newTask.project_id}
-                              onChange={(e) => setNewTask(prev => ({ ...prev, project_id: e.target.value }))}
-                              className="w-full px-3 py-2 bg-white border border-black rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 text-black transition-colors"
-                            >
-                              <option value="">Select a project</option>
-                              {projects.map((project) => (
-                                <option key={project.id} value={project.id}>
-                                  {project.name}
-                                </option>
+                                  <div className="flex items-center justify-between text-xs text-gray-500">
+                                    <span className={`font-medium ${getStatusColor(task.status)}`}>
+                                      {getStatusIcon(task.status)} {task.status.replace('_', ' ')}
+                                    </span>
+                                    {task.due_date && (
+                                      <span className={`font-medium ${task.is_overdue ? 'text-red-600' : 'text-gray-600'}`}>
+                                        Due: {new Date(task.due_date).toLocaleDateString()}
+                                      </span>
+                                    )}
+                                  </div>
+                                </div>
                               ))}
-                            </select>
+
+                              {tasksByStatus.assigned.length === 0 && (
+                                <div className="text-center py-8 text-gray-400">
+                                  <div className="text-2xl mb-2">{getStatusIcon('assigned')}</div>
+                                  <p className="text-sm">No assigned tasks</p>
+                                </div>
+                              )}
+                            </div>
                           </div>
 
-                          <div>
-                            <label className="block text-sm font-medium text-gray-700 mb-2">
-                              Status
-                            </label>
-                            <select
-                              value={newTask.status}
-                              onChange={(e) => setNewTask(prev => ({ ...prev, status: e.target.value }))}
-                              className="w-full px-3 py-2 bg-white border border-black rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 text-black transition-colors"
-                            >
-                              <option value="todo">📝 To Do</option>
-                              <option value="in_progress">⚡ In Progress</option>
-                              <option value="review">👁️ Review</option>
-                              <option value="done">✅ Done</option>
-                            </select>
+                          {/* In Progress */}
+                          <div
+                            className={`bg-white rounded-lg shadow-sm border border-gray-200 p-6 transition-all ${
+                              dragOverStatus === 'in_progress' ? 'border-yellow-400 bg-yellow-50 shadow-lg' : ''
+                            }`}
+                            onDragOver={handleDragOver}
+                            onDragEnter={() => handleDragEnter('in_progress')}
+                            onDragLeave={handleDragLeave}
+                            onDrop={(e) => handleDrop(e, 'in_progress')}
+                          >
+                            <div className="flex items-center justify-between mb-4">
+                              <h3 className="text-lg font-semibold text-gray-900 flex items-center">
+                                <span className="mr-2">{getStatusIcon('in_progress')}</span>
+                                In Progress
+                              </h3>
+                              <span className="px-2 py-1 bg-yellow-100 text-yellow-800 rounded-full text-sm font-medium">
+                                {tasksByStatus.in_progress.length}
+                              </span>
+                            </div>
+
+                            <div className="space-y-3">
+                              {tasksByStatus.in_progress.map((task) => (
+                                <div
+                                  key={task.id}
+                                  draggable
+                                  onDragStart={(e) => handleDragStart(e, task)}
+                                  onDragEnd={handleDragEnd}
+                                  className="bg-gray-50 rounded-lg p-3 border border-gray-200 hover:shadow-md transition-all cursor-move"
+                                >
+                                  <h4 className="text-gray-900 font-medium text-sm mb-2">{task.title}</h4>
+                                  <div className="flex items-center justify-between text-xs text-gray-500 mb-2">
+                                    <span className="capitalize font-medium">
+                                      {task.priority === 'urgent' && '🔴 '}
+                                      {task.priority === 'high' && '🟠 '}
+                                      {task.priority === 'medium' && '🟡 '}
+                                      {task.priority === 'low' && '🟢 '}
+                                      {task.priority}
+                                    </span>
+                                    <div className="flex items-center space-x-1">
+                                      <div className="w-16 bg-gray-200 rounded-full h-1">
+                                        <div
+                                          className="bg-yellow-500 h-1 rounded-full"
+                                          style={{ width: `${task.progress || 0}%` }}
+                                        ></div>
+                                      </div>
+                                      <span className="font-medium">{task.progress || 0}%</span>
+                                    </div>
+                                  </div>
+                                </div>
+                              ))}
+
+                              {tasksByStatus.in_progress.length === 0 && (
+                                <div className="text-center py-8 text-gray-400">
+                                  <div className="text-2xl mb-2">{getStatusIcon('in_progress')}</div>
+                                  <p className="text-sm">No tasks in progress</p>
+                                </div>
+                              )}
+                            </div>
+                          </div>
+
+                          {/* In Review */}
+                          <div
+                            className={`bg-white rounded-lg shadow-sm border border-gray-200 p-6 transition-all ${
+                              dragOverStatus === 'review' ? 'border-purple-400 bg-purple-50 shadow-lg' : ''
+                            }`}
+                            onDragOver={handleDragOver}
+                            onDragEnter={() => handleDragEnter('review')}
+                            onDragLeave={handleDragLeave}
+                            onDrop={(e) => handleDrop(e, 'review')}
+                          >
+                            <div className="flex items-center justify-between mb-4">
+                              <h3 className="text-lg font-semibold text-gray-900 flex items-center">
+                                <span className="mr-2">{getStatusIcon('in_review')}</span>
+                                In Review
+                              </h3>
+                              <span className="px-2 py-1 bg-purple-100 text-purple-800 rounded-full text-sm font-medium">
+                                {tasksByStatus.in_review.length}
+                              </span>
+                            </div>
+
+                            <div className="space-y-3">
+                              {tasksByStatus.in_review.map((task) => (
+                                <div
+                                  key={task.id}
+                                  draggable
+                                  onDragStart={(e) => handleDragStart(e, task)}
+                                  onDragEnd={handleDragEnd}
+                                  className="bg-gray-50 rounded-lg p-3 border border-gray-200 hover:shadow-md transition-all cursor-move"
+                                >
+                                  <h4 className="text-gray-900 font-medium text-sm mb-2">{task.title}</h4>
+                                  <div className="flex items-center justify-between text-xs text-gray-500">
+                                    <span className="capitalize font-medium">
+                                      {task.priority === 'urgent' && '🔴 '}
+                                      {task.priority === 'high' && '🟠 '}
+                                      {task.priority === 'medium' && '🟡 '}
+                                      {task.priority === 'low' && '🟢 '}
+                                      {task.priority}
+                                    </span>
+                                    <span className="font-medium">⏳ Awaiting review</span>
+                                  </div>
+                                </div>
+                              ))}
+
+                              {tasksByStatus.in_review.length === 0 && (
+                                <div className="text-center py-8 text-gray-400">
+                                  <div className="text-2xl mb-2">{getStatusIcon('in_review')}</div>
+                                  <p className="text-sm">No tasks in review</p>
+                                </div>
+                              )}
+                            </div>
+                          </div>
+
+                          {/* Completed */}
+                          <div
+                            className={`bg-white rounded-lg shadow-sm border border-gray-200 p-6 transition-all ${
+                              dragOverStatus === 'done' ? 'border-green-400 bg-green-50 shadow-lg' : ''
+                            }`}
+                            onDragOver={handleDragOver}
+                            onDragEnter={() => handleDragEnter('done')}
+                            onDragLeave={handleDragLeave}
+                            onDrop={(e) => handleDrop(e, 'done')}
+                          >
+                            <div className="flex items-center justify-between mb-4">
+                              <h3 className="text-lg font-semibold text-gray-900 flex items-center">
+                                <span className="mr-2">{getStatusIcon('completed')}</span>
+                                Completed
+                              </h3>
+                              <span className="px-2 py-1 bg-green-100 text-green-800 rounded-full text-sm font-medium">
+                                {tasksByStatus.completed.length}
+                              </span>
+                            </div>
+
+                            <div className="space-y-3">
+                              {tasksByStatus.completed.map((task) => (
+                                <div
+                                  key={task.id}
+                                  draggable
+                                  onDragStart={(e) => handleDragStart(e, task)}
+                                  onDragEnd={handleDragEnd}
+                                  className="bg-green-50 rounded-lg p-3 border border-green-200 hover:shadow-md transition-all cursor-move"
+                                >
+                                  <h4 className="text-gray-900 font-medium text-sm mb-2 line-through opacity-75">{task.title}</h4>
+                                  <div className="flex items-center justify-between text-xs text-gray-500">
+                                    <span className="capitalize font-medium">
+                                      {task.priority === 'urgent' && '🔴 '}
+                                      {task.priority === 'high' && '🟠 '}
+                                      {task.priority === 'medium' && '🟡 '}
+                                      {task.priority === 'low' && '🟢 '}
+                                      {task.priority}
+                                    </span>
+                                    <span className="font-medium text-green-600">✅ Done</span>
+                                  </div>
+                                </div>
+                              ))}
+
+                              {tasksByStatus.completed.length === 0 && (
+                                <div className="text-center py-8 text-gray-400">
+                                  <div className="text-2xl mb-2">{getStatusIcon('completed')}</div>
+                                  <p className="text-sm">No completed tasks</p>
+                                </div>
+                              )}
+                            </div>
+                          </div>
+
+                          {/* Overdue */}
+                          <div className="bg-white rounded-lg shadow-sm border border-gray-200 p-6">
+                            <div className="flex items-center justify-between mb-4">
+                              <h3 className="text-lg font-semibold text-gray-900 flex items-center">
+                                <span className="mr-2">{getStatusIcon('overdue')}</span>
+                                Overdue
+                              </h3>
+                              <span className="px-2 py-1 bg-red-100 text-red-800 rounded-full text-sm font-medium">
+                                {tasksByStatus.overdue.length}
+                              </span>
+                            </div>
+
+                            <div className="space-y-3">
+                              {tasksByStatus.overdue.map((task) => (
+                                <div key={task.id} className="bg-red-50 rounded-lg p-3 border border-red-200 hover:shadow-md transition-shadow">
+                                  <h4 className="text-gray-900 font-medium text-sm mb-2">{task.title}</h4>
+                                  <div className="flex items-center justify-between text-xs text-gray-500 mb-2">
+                                    <span className="capitalize font-medium">
+                                      {task.priority === 'urgent' && '🔴 '}
+                                      {task.priority === 'high' && '🟠 '}
+                                      {task.priority === 'medium' && '🟡 '}
+                                      {task.priority === 'low' && '🟢 '}
+                                      {task.priority}
+                                    </span>
+                                    <span className="font-medium text-red-600">🚨 Overdue</span>
+                                  </div>
+                                  {task.due_date && (
+                                    <div className="text-xs text-red-600 font-medium">
+                                      Due: {new Date(task.due_date).toLocaleDateString()}
+                                    </div>
+                                  )}
+                                </div>
+                              ))}
+
+                              {tasksByStatus.overdue.length === 0 && (
+                                <div className="text-center py-8 text-gray-400">
+                                  <div className="text-2xl mb-2">{getStatusIcon('overdue')}</div>
+                                  <p className="text-sm">No overdue tasks</p>
+                                </div>
+                              )}
+                            </div>
                           </div>
                         </div>
-                      </div>
 
-                      {/* Skills & Notes Card */}
-                      <div className="bg-white border border-gray-200 rounded-xl p-6">
-                        <div className="flex items-center space-x-2 mb-4">
-                          <svg className="w-5 h-5 text-indigo-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m2.828 9.9a5 5 0 117.072 0l-.548.547A3.374 3.374 0 0014 18.469V19a2 2 0 11-4 0v-.531c0-.895-.356-1.754-.988-2.386l-.548-.547z" />
-                          </svg>
-                          <h3 className="text-lg font-semibold text-gray-900">Skills & Notes</h3>
+                        {/* Quick Stats */}
+                        <div className="mt-8 grid grid-cols-2 md:grid-cols-4 gap-4">
+                          <div className="bg-white rounded-lg shadow-sm border border-gray-200 p-4 text-center">
+                            <div className="text-2xl font-bold text-gray-900">{tasks.length}</div>
+                            <div className="text-sm text-gray-600">Total Created</div>
+                          </div>
+                          <div className="bg-white rounded-lg shadow-sm border border-gray-200 p-4 text-center">
+                            <div className="text-2xl font-bold text-blue-600">{tasksByStatus.assigned.length}</div>
+                            <div className="text-sm text-gray-600">Active</div>
+                          </div>
+                          <div className="bg-white rounded-lg shadow-sm border border-gray-200 p-4 text-center">
+                            <div className="text-2xl font-bold text-yellow-600">{tasksByStatus.in_progress.length}</div>
+                            <div className="text-sm text-gray-600">In Progress</div>
+                          </div>
+                          <div className="bg-white rounded-lg shadow-sm border border-gray-200 p-4 text-center">
+                            <div className="text-2xl font-bold text-green-600">{tasksByStatus.completed.length}</div>
+                            <div className="text-sm text-gray-600">Completed</div>
+                          </div>
                         </div>
+                      </>
+                    )}
+                  </>
+                )}
+              </>
+            )}
+          </div>
+        </div>
+      </div>
 
-                        <div className="space-y-4">
-                          <SkillsSelection
-                            selectedSkills={newTask.required_skills}
-                            onSkillsChange={(skills) => setNewTask(prev => ({ ...prev, required_skills: skills }))}
-                            placeholder="Select required skills for this task..."
-                          />
-                        </div>
-                      </div>
-                    </div>
-
-                    {/* Action Buttons */}
-                    <div className="flex justify-end space-x-4 pt-6 border-t border-gray-200">
-                      <button
-                        type="button"
-                        onClick={() => setShowTaskModal(false)}
-                        className="px-6 py-3 bg-gray-100 hover:bg-gray-200 text-gray-700 font-medium rounded-lg transition-colors duration-200"
-                      >
-                        Cancel
-                      </button>
-                      <button
-                        type="submit"
-                        className="px-8 py-3 bg-gradient-to-r from-blue-600 to-purple-600 hover:from-blue-700 hover:to-purple-700 text-white font-medium rounded-lg shadow-lg hover:shadow-xl transition-all duration-200 transform hover:-translate-y-0.5"
-                      >
-                        <span className="flex items-center space-x-2">
-                          <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 6v6m0 0v6m0-6h6m-6 0H6" />
-                          </svg>
-                          <span>Create Task</span>
-                        </span>
-                      </button>
-                    </div>
-                  </form>
+      {/* Task Creation Modal */}
+      {showTaskModal && (
+        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+          <div className="bg-white w-full max-w-2xl max-h-[95vh] overflow-hidden rounded-2xl shadow-2xl">
+            {/* Header */}
+            <div className="bg-gradient-to-r from-purple-600 to-blue-600 px-6 py-4">
+              <div className="flex justify-between items-center">
+                <div className="flex items-center space-x-3">
+                  <div className="w-10 h-10 bg-white/20 rounded-full flex items-center justify-center">
+                    <svg className="w-6 h-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5H7a2 2 0 00-2 2v10a2 2 0 002 2h8a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2" />
+                    </svg>
+                  </div>
+                  <div>
+                    <h2 className="text-xl font-bold text-white">Create New Task</h2>
+                    <p className="text-purple-100 text-sm">Add a new task to your project</p>
+                  </div>
                 </div>
+                <button
+                  onClick={() => setShowTaskModal(false)}
+                  className="w-8 h-8 bg-white/20 hover:bg-white/30 rounded-full flex items-center justify-center text-white transition-colors"
+                >
+                  ✕
+                </button>
               </div>
             </div>
-          )}
 
-          {/* Employee Modal */}
-          {showEmployeeModal && (
-            <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-4">
-              <div className="bg-white w-full max-w-2xl max-h-[95vh] overflow-hidden rounded-2xl shadow-2xl">
-                {/* Header */}
-                <div className="bg-gradient-to-r from-green-600 to-blue-600 px-6 py-4">
-                  <div className="flex justify-between items-center">
-                    <div className="flex items-center space-x-3">
-                      <div className="w-10 h-10 bg-white/20 rounded-full flex items-center justify-center">
-                        <svg className="w-6 h-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4.354a4 4 0 110 5.292M15 21H3v-1a6 6 0 0112 0v1zm0 0h6v-1a6 6 0 00-9-5.197m13.5-9a2.5 2.5 0 11-5 0 2.5 2.5 0 015 0z" />
-                        </svg>
-                      </div>
-                      <div>
-                        <h2 className="text-xl font-bold text-white">Add New Employee</h2>
-                        <p className="text-green-100 text-sm">Create a new team member</p>
-                      </div>
-                    </div>
-                    <button
-                      onClick={() => setShowEmployeeModal(false)}
-                      className="w-8 h-8 bg-white/20 hover:bg-white/30 rounded-full flex items-center justify-center text-white transition-colors"
+            {/* Form Content */}
+            <div className="overflow-y-auto max-h-[calc(95vh-120px)]">
+              <form onSubmit={handleCreateTask} className="p-6 space-y-6">
+                {/* Task Title */}
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-2">
+                    Task Title <span className="text-red-500">*</span>
+                  </label>
+                  <input
+                    type="text"
+                    required
+                    value={newTask.title}
+                    onChange={(e) => setNewTask(prev => ({ ...prev, title: e.target.value }))}
+                    className="w-full px-4 py-3 bg-white border border-black rounded-lg focus:ring-2 focus:ring-purple-500 focus:border-purple-500 text-black transition-colors"
+                    placeholder="Enter task title..."
+                  />
+                </div>
+
+                {/* Task Description */}
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-2">
+                    Description
+                  </label>
+                  <textarea
+                    value={newTask.description}
+                    onChange={(e) => setNewTask(prev => ({ ...prev, description: e.target.value }))}
+                    rows={3}
+                    className="w-full px-4 py-3 bg-white border border-black rounded-lg focus:ring-2 focus:ring-purple-500 focus:border-purple-500 text-black transition-colors"
+                    placeholder="Enter task description..."
+                  />
+                </div>
+
+                {/* Priority and Difficulty */}
+                <div className="grid grid-cols-2 gap-4">
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-2">
+                      Priority Score <span className="text-red-500">*</span>
+                    </label>
+                    <select
+                      value={newTask.priority_score}
+                      onChange={(e) => setNewTask(prev => ({ ...prev, priority_score: parseInt(e.target.value) }))}
+                      className="w-full px-4 py-3 bg-white border border-black rounded-lg focus:ring-2 focus:ring-purple-500 focus:border-purple-500 text-black transition-colors"
                     >
-                      ✕
-                    </button>
+                      <option value={1}>1 - Low</option>
+                      <option value={2}>2 - Medium-Low</option>
+                      <option value={3}>3 - Medium</option>
+                      <option value={4}>4 - Medium-High</option>
+                      <option value={5}>5 - High</option>
+                    </select>
+                  </div>
+
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-2">
+                      Difficulty Score <span className="text-red-500">*</span>
+                    </label>
+                    <select
+                      value={newTask.difficulty_score}
+                      onChange={(e) => setNewTask(prev => ({ ...prev, difficulty_score: parseInt(e.target.value) }))}
+                      className="w-full px-4 py-3 bg-white border border-black rounded-lg focus:ring-2 focus:ring-purple-500 focus:border-purple-500 text-black transition-colors"
+                    >
+                      <option value={1}>1 - Very Easy</option>
+                      <option value={2}>2 - Easy</option>
+                      <option value={3}>3 - Medium</option>
+                      <option value={4}>4 - Hard</option>
+                      <option value={5}>5 - Very Hard</option>
+                      <option value={6}>6 - Expert</option>
+                      <option value={7}>7 - Expert+</option>
+                      <option value={8}>8 - Specialist</option>
+                      <option value={9}>9 - Master</option>
+                      <option value={10}>10 - Grandmaster</option>
+                    </select>
                   </div>
                 </div>
 
-                {/* Form Content */}
-                <div className="overflow-y-auto max-h-[calc(95vh-120px)]">
-                  <form onSubmit={handleEmployeeSubmit} className="p-6 space-y-6">
-                    {/* Employee Information Card */}
-                    <div className="bg-gray-50 rounded-xl p-6 border border-gray-200">
-                      <div className="flex items-center space-x-2 mb-4">
-                        <svg className="w-5 h-5 text-green-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                {/* Required Skills */}
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-2">
+                    Required Skills
+                  </label>
+                  <SkillsSelection
+                    selectedSkills={newTask.required_skills}
+                    onSkillsChange={(skills) => setNewTask(prev => ({ ...prev, required_skills: skills }))}
+                    placeholder="Select skills required for this task..."
+                  />
+                </div>
+
+                {/* Due Date */}
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-2">
+                    Due Date
+                  </label>
+                  <div className="relative">
+                    <DatePicker
+                      selected={newTask.due_date}
+                      onChange={(date) => setNewTask(prev => ({ ...prev, due_date: date }))}
+                      dateFormat="yyyy-MM-dd hh:mm aa"
+                      showTimeSelect
+                      timeFormat="HH:mm"
+                      timeIntervals={15}
+                      minDate={new Date()}
+                      placeholderText="Select due date and time"
+                      className="w-full px-4 py-3 bg-white border border-black rounded-lg focus:ring-2 focus:ring-purple-500 focus:border-purple-500 text-black transition-colors"
+                      wrapperClassName="w-full"
+                    />
+                    <div className="absolute right-3 top-3 pointer-events-none">
+                      <svg className="w-5 h-5 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" />
+                      </svg>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Assign to Employee */}
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-2">
+                    Assign to Employee
+                  </label>
+                  <div className="relative">
+                    <select
+                      value={newTask.assigned_to}
+                      onChange={(e) => setNewTask(prev => ({ ...prev, assigned_to: e.target.value }))}
+                      className="w-full px-4 py-3 pl-10 bg-white border border-black rounded-lg focus:ring-2 focus:ring-purple-500 focus:border-purple-500 text-black transition-colors"
+                      disabled={employeesLoading}
+                    >
+                      <option value="">
+                        {employeesLoading ? 'Loading employees...' : 'Select employee (optional)'}
+                      </option>
+                      {assignableEmployees.map((employee) => (
+                        <option key={employee.auth_id} value={employee.auth_id}>
+                          {employee.name} ({employee.email})
+                        </option>
+                      ))}
+                    </select>
+                    <div className="absolute left-3 top-3 pointer-events-none">
+                      <svg className="w-5 h-5 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z" />
+                      </svg>
+                    </div>
+                  </div>
+                  {assignableEmployees.length > 0 && (
+                    <p className="text-xs text-gray-500 mt-1">
+                      {assignableEmployees.length} employees available for assignment
+                    </p>
+                  )}
+                </div>
+
+                {/* Action Buttons */}
+                <div className="flex justify-end space-x-4 pt-6 border-t border-gray-200">
+                  <button
+                    type="button"
+                    onClick={() => setShowTaskModal(false)}
+                    className="px-6 py-3 bg-gray-100 hover:bg-gray-200 text-gray-700 font-medium rounded-lg transition-colors duration-200"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="submit"
+                    disabled={taskCreating}
+                    className="px-8 py-3 bg-gradient-to-r from-purple-600 to-blue-600 hover:from-purple-700 hover:to-blue-700 text-white font-medium rounded-lg shadow-lg hover:shadow-xl transition-all duration-200 transform hover:-translate-y-0.5 disabled:opacity-50 disabled:cursor-not-allowed"
+                  >
+                    {taskCreating ? (
+                      <span className="flex items-center space-x-2">
+                        <div className="animate-spin rounded-full h-4 w-4 border-2 border-white border-t-transparent"></div>
+                        <span>Creating...</span>
+                      </span>
+                    ) : (
+                      <span className="flex items-center space-x-2">
+                        <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
+                        </svg>
+                        <span>Create Task</span>
+                      </span>
+                    )}
+                  </button>
+                </div>
+              </form>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Task Assignment Modal */}
+      {showAssignModal && taskToAssign && (
+        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+          <div className="bg-white w-full max-w-md max-h-[95vh] overflow-hidden rounded-2xl shadow-2xl">
+            {/* Header */}
+            <div className="bg-gradient-to-r from-blue-600 to-purple-600 px-6 py-4">
+              <div className="flex justify-between items-center">
+                <div className="flex items-center space-x-3">
+                  <div className="w-10 h-10 bg-white/20 rounded-full flex items-center justify-center">
+                    <svg className="w-6 h-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z" />
+                    </svg>
+                  </div>
+                  <div>
+                    <h2 className="text-xl font-bold text-white">Assign Task</h2>
+                    <p className="text-blue-100 text-sm">Assign task to an employee</p>
+                  </div>
+                </div>
+                <button
+                  onClick={() => {
+                    setShowAssignModal(false);
+                    setTaskToAssign(null);
+                  }}
+                  className="w-8 h-8 bg-white/20 hover:bg-white/30 rounded-full flex items-center justify-center text-white transition-colors"
+                >
+                  ✕
+                </button>
+              </div>
+            </div>
+
+            {/* Task Info */}
+            <div className="px-6 py-4 bg-gray-50 border-b border-gray-200">
+              <h3 className="font-medium text-gray-900 mb-1">{taskToAssign.title}</h3>
+              <p className="text-sm text-gray-600">
+                {taskToAssign.priority === 'urgent' && '🔴 '}
+                {taskToAssign.priority === 'high' && '🟠 '}
+                {taskToAssign.priority === 'medium' && '🟡 '}
+                {taskToAssign.priority === 'low' && '🟢 '}
+                {taskToAssign.priority} priority
+              </p>
+            </div>
+
+            {/* Form Content */}
+            <div className="p-6">
+              <div className="space-y-4">
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-2">
+                    Select Employee <span className="text-red-500">*</span>
+                  </label>
+                  <select
+                    id="employeeSelect"
+                    className="w-full px-4 py-3 bg-white border border-black rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 text-black transition-colors"
+                    disabled={employeesLoading || assigningTask}
+                    defaultValue=""
+                  >
+                    <option value="" disabled>
+                      {employeesLoading ? 'Loading employees...' : 'Choose an employee'}
+                    </option>
+                    {assignableEmployees.map((employee) => (
+                      <option key={employee.auth_id} value={employee.auth_id}>
+                        {employee.name} ({employee.email})
+                      </option>
+                    ))}
+                  </select>
+                  {assignableEmployees.length > 0 && (
+                    <p className="text-xs text-gray-500 mt-1">
+                      {assignableEmployees.length} employees available for assignment
+                    </p>
+                  )}
+                </div>
+
+                {/* Action Buttons */}
+                <div className="flex justify-end space-x-4 pt-4 border-t border-gray-200">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setShowAssignModal(false);
+                      setTaskToAssign(null);
+                    }}
+                    disabled={assigningTask}
+                    className="px-6 py-3 bg-gray-100 hover:bg-gray-200 text-gray-700 font-medium rounded-lg transition-colors duration-200 disabled:opacity-50"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const selectElement = document.getElementById('employeeSelect');
+                      const employeeId = selectElement.value;
+                      if (employeeId) {
+                        handleAssignTask(taskToAssign.id, employeeId);
+                      } else {
+                        alert('Please select an employee');
+                      }
+                    }}
+                    disabled={assigningTask || employeesLoading}
+                    className="px-6 py-3 bg-gradient-to-r from-blue-600 to-purple-600 hover:from-blue-700 hover:to-purple-700 text-white font-medium rounded-lg shadow-lg hover:shadow-xl transition-all duration-200 transform hover:-translate-y-0.5 disabled:opacity-50 disabled:cursor-not-allowed"
+                  >
+                    {assigningTask ? (
+                      <span className="flex items-center space-x-2">
+                        <div className="animate-spin rounded-full h-4 w-4 border-2 border-white border-t-transparent"></div>
+                        <span>Assigning...</span>
+                      </span>
+                    ) : (
+                      <span className="flex items-center space-x-2">
+                        <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                           <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z" />
                         </svg>
-                        <h3 className="text-lg font-semibold text-gray-900">Employee Information</h3>
-                      </div>
-
-                      {/* Email */}
-                      <div className="mb-4">
-                        <label className="block text-sm font-medium text-gray-700 mb-2">
-                          Email Address <span className="text-red-500">*</span>
-                        </label>
-                        <div className="relative">
-                          <input
-                            type="email"
-                            required
-                            value={newEmployee.email}
-                            onChange={(e) => setNewEmployee(prev => ({ ...prev, email: e.target.value }))}
-                            className="w-full px-4 py-3 pl-10 bg-white border border-black rounded-lg focus:ring-2 focus:ring-green-500 focus:border-green-500 text-black transition-colors"
-                            placeholder="employee@company.com"
-                          />
-                          <svg className="w-5 h-5 text-gray-400 absolute left-3 top-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 8l7.89 5.26a2 2 0 002.22 0L21 8M5 19h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" />
-                          </svg>
-                        </div>
-                      </div>
-
-                      {/* Name */}
-                      <div className="mb-4">
-                        <label className="block text-sm font-medium text-gray-700 mb-2">
-                          Full Name <span className="text-red-500">*</span>
-                        </label>
-                        <div className="relative">
-                          <input
-                            type="text"
-                            required
-                            value={newEmployee.name}
-                            onChange={(e) => setNewEmployee(prev => ({ ...prev, name: e.target.value }))}
-                            className="w-full px-4 py-3 pl-10 bg-white border border-black rounded-lg focus:ring-2 focus:ring-green-500 focus:border-green-500 text-black transition-colors"
-                            placeholder="John Doe"
-                          />
-                          <svg className="w-5 h-5 text-gray-400 absolute left-3 top-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z" />
-                          </svg>
-                        </div>
-                      </div>
-
-                      {/* Profile Picture URL */}
-                      <div className="mb-4">
-                        <label className="block text-sm font-medium text-gray-700 mb-2">
-                          Profile Picture URL
-                        </label>
-                        <div className="relative">
-                          <input
-                            type="url"
-                            value={newEmployee.profile_picture}
-                            onChange={(e) => setNewEmployee(prev => ({ ...prev, profile_picture: e.target.value }))}
-                            className="w-full px-4 py-3 pl-10 bg-white border border-black rounded-lg focus:ring-2 focus:ring-green-500 focus:border-green-500 text-black transition-colors"
-                            placeholder="https://example.com/profile.jpg"
-                          />
-                          <svg className="w-5 h-5 text-gray-400 absolute left-3 top-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z" />
-                          </svg>
-                        </div>
-                        <p className="text-xs text-gray-500 mt-1">Optional: Leave empty to use default profile picture</p>
-                      </div>
-
-                      {/* Skills */}
-                      <SkillsSelection
-                        selectedSkills={newEmployee.skill_vector}
-                        onSkillsChange={(skills) => setNewEmployee(prev => ({ ...prev, skill_vector: skills }))}
-                        placeholder="Select employee skills..."
-                      />
-                    </div>
-
-                    {/* Action Buttons */}
-                    <div className="flex justify-end space-x-4 pt-6 border-t border-gray-200">
-                      <button
-                        type="button"
-                        onClick={() => setShowEmployeeModal(false)}
-                        className="px-6 py-3 bg-gray-100 hover:bg-gray-200 text-gray-700 font-medium rounded-lg transition-colors duration-200"
-                      >
-                        Cancel
-                      </button>
-                      <button
-                        type="submit"
-                        className="px-8 py-3 bg-gradient-to-r from-green-600 to-blue-600 hover:from-green-700 hover:to-blue-700 text-white font-medium rounded-lg shadow-lg hover:shadow-xl transition-all duration-200 transform hover:-translate-y-0.5"
-                      >
-                        <span className="flex items-center space-x-2">
-                          <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M18 9v3m0 0v3m0-3h3m-3 0h-3m-2-5a4 4 0 11-8 0 4 4 0 018 0zM3 20a6 6 0 0112 0v1H3v-1z" />
-                          </svg>
-                          <span>Add Employee</span>
-                        </span>
-                      </button>
-                    </div>
-                  </form>
+                        <span>Assign Task</span>
+                      </span>
+                    )}
+                  </button>
                 </div>
               </div>
             </div>
-          )}
-
+          </div>
         </div>
+      )}
     </div>
   );
 };

@@ -1,5 +1,5 @@
 from pydantic import BaseModel, Field, validator
-from typing import Optional, List
+from typing import Optional, List, Dict
 from datetime import datetime, timezone
 
 # User Task Creation Schema
@@ -45,6 +45,8 @@ class EmployeeCreate(BaseModel):
     name: str = Field(..., min_length=1, max_length=255, description="Employee full name")
     profile_picture: Optional[str] = Field(None, description="Profile picture URL")
     skill_vector: Optional[str] = Field("", description="Comma-separated list of employee skills")
+    experience_years: Optional[Dict[str, int]] = Field(default_factory=dict, description="Experience in months for each skill")
+    tenure: Optional[Dict[str, int]] = Field(default_factory=dict, description="Tenure in months for each skill at company")
 
     @validator('email')
     def email_must_be_valid(cls, v):
@@ -52,3 +54,8 @@ class EmployeeCreate(BaseModel):
         if not re.match(r'^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$', v):
             raise ValueError('Invalid email format')
         return v.lower()  # normalize to lowercase
+
+
+# Task Assignment Schema
+class TaskAssignment(BaseModel):
+    employee_id: str = Field(..., description="UUID of the employee to assign the task to")

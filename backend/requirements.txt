@@ -29,11 +29,8 @@ google-genai==1.39.0
 python-dateutil
 numpy
 aiofiles
-razorpay
-beautifulsoup4
 aiohttp
 textstat
 apscheduler
 sentence-transformers>=2.2.0
 torch>=2.0.0
-playwright>=1.40.0

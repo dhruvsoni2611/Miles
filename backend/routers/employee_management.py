@@ -7,8 +7,11 @@ import os
 
 # Import the schema and supabase
 try:
-    from schemas import UserTaskCreate, EmployeeCreate
+    from schemas import UserTaskCreate, EmployeeCreate, TaskAssignment
     from main import get_current_user
+    from agents.embeddings import create_skill_embeddings
+    from agents.score_calculation import calculate_employee_productivity_score
+    from agents.workload_score import get_workload_score_calculator
 except ImportError:
     # Fallback for direct execution
     import sys
@@ -16,8 +19,11 @@ except ImportError:
     backend_dir = os.path.dirname(os.path.dirname(__file__))
     if backend_dir not in sys.path:
         sys.path.insert(0, backend_dir)
-    from schemas import UserTaskCreate, EmployeeCreate
+    from schemas import UserTaskCreate, EmployeeCreate, TaskAssignment
     from main import get_current_user
+    from agents.embeddings import create_skill_embeddings
+    from agents.score_calculation import calculate_employee_productivity_score
+    from agents.workload_score import get_workload_score_calculator
 
 # Supabase admin client - created lazily to avoid import issues
 _supabase_admin = None
@@ -114,19 +120,37 @@ async def create_task(
                     detail="You can only assign tasks to employees you manage"
                 )
 
+        # Process task skills and generate embeddings
+        skill_names = task.required_skills or []
+        skill_vector_data = None
+
+        if skill_names and len(skill_names) > 0:
+            # Generate embeddings for task skills
+            try:
+                skill_embeddings = create_skill_embeddings(', '.join(skill_names))
+                skill_vector_data = skill_embeddings  # Store just the vectors array
+                print(f"✅ Generated embeddings for {len(skill_embeddings) if skill_embeddings else 0} task skills")
+            except Exception as embedding_error:
+                print(f"⚠️ Failed to generate embeddings for task skills: {embedding_error}")
+                print("📝 Continuing with skill names only - embeddings will be generated later if needed")
+                skill_vector_data = []
+
         # 4. DATA PREPARATION
         task_data = {
             "created_by": user_id,  # Use created_by field in database
             "title": task.title,
             "description": task.description,
             "project_id": task.project_id,  # UUID string for project reference
-            "priority": task.get_priority_int(),  # Convert string to integer (1-5)
-            "difficulty_level": task.difficulty_level,  # 1-10 scale
-            "required_skills": task.required_skills or [],  # JSONB array of skill names
+            "priority_score": task.get_priority_int(),  # Convert string to integer (1-5)
+            "difficulty_score": task.difficulty_level,  # 1-10 scale
+            "required_skills": skill_names,  # JSONB array of skill names
+            "skill_embedding": skill_vector_data,  # JSONB array of skill embeddings
             "status": task.status,  # Must be: todo, in_progress, review, done
             "assigned_to": task.assigned_to,  # UUID string for assigned user
             "due_date": task.due_date.isoformat() if task.due_date else None,  # Changed from deadline
-            # "notes": task.notes  # Temporarily removed until schema is updated
+            "rating_score": 0,  # Default rating score
+            "justified": False,  # Default justified value
+            "bonus": False  # Default bonus value
         }
 
         # 5. DATABASE INSERTION
@@ -144,6 +168,21 @@ async def create_task(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 detail="Task creation failed - no data returned from database"
             )
+
+        # Update workload score if task is assigned to an employee
+        if task.assigned_to:
+            try:
+                workload_calculator = get_workload_score_calculator()
+                success = workload_calculator.update_employee_workload_score(
+                    task.assigned_to, get_supabase_admin()
+                )
+                if success:
+                    print(f"✅ Updated workload score for employee {task.assigned_to}")
+                else:
+                    print(f"⚠️ Failed to update workload score for employee {task.assigned_to}")
+            except Exception as e:
+                print(f"⚠️ Error updating workload score for employee {task.assigned_to}: {e}")
+                # Don't fail the task creation if workload update fails
 
         # Assignment creation is now handled by frontend via separate API call
         # This allows for better error handling and separation of concerns
@@ -170,11 +209,50 @@ async def create_task(
         # Add is_overdue to task_result
         task_result["is_overdue"] = is_overdue
 
+        # Get assignable employees list for task assignment
+        assignable_employees = []
+        try:
+            # Get employees managed by current user
+            reporting_response = get_supabase_admin().table('user_reporting').select(
+                'employee_id'
+            ).eq('manager_id', user_id).execute()
+
+            if reporting_response.data:
+                employee_ids = [r['employee_id'] for r in reporting_response.data]
+
+                # Get employee details
+                employees_response = get_supabase_admin().table('user_miles').select(
+                    'auth_id, name, email, productivity_score, workload'
+                ).in_('auth_id', employee_ids).execute()
+
+                assignable_employees = employees_response.data or []
+
+                # Add active task count to each employee
+                for employee in assignable_employees:
+                    try:
+                        # Get active task count
+                        tasks_response = get_supabase_admin().table('tasks').select(
+                            'id, status'
+                        ).eq('assigned_to', employee['auth_id']).execute()
+
+                        active_tasks = [t for t in (tasks_response.data or []) if t.get('status') not in ['done', 'review']]
+                        employee['active_task_count'] = len(active_tasks)
+                    except Exception as e:
+                        print(f"⚠️ Error getting task count for employee {employee['auth_id']}: {e}")
+                        employee['active_task_count'] = 0
+        except Exception as e:
+            print(f"⚠️ Error fetching assignable employees: {e}")
+            assignable_employees = []
+
         # 7. SUCCESS RESPONSE
         return {
             "success": True,
             "message": "Task created successfully",
-            "data": task_result
+            "data": {
+                "task": task_result,
+                "assignable_employees": assignable_employees,
+                "assignable_employees_count": len(assignable_employees)
+            }
         }
 
         # 7. ERROR HANDLING
@@ -186,6 +264,211 @@ async def create_task(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Internal server error occurred while creating task"
+        )
+
+
+@router.put("/tasks/{task_id}/assign")
+async def assign_task_to_employee(
+    task_id: str,
+    assignment: TaskAssignment,
+    current_user: dict = Depends(get_current_user)
+):
+    """
+    Assign a task to an employee with proper validation.
+
+    Validates that:
+    - Current user can assign this task (created it or is manager)
+    - Employee is managed by current user (from user_reporting)
+    - Task exists and is not already assigned
+
+    Updates task assignment and employee workload score.
+    """
+    try:
+        # Get authenticated user ID
+        user_id = current_user.id
+        supabase_client = get_supabase_admin()
+
+        # 1. Validate task exists and get task details
+        task_response = supabase_client.table('tasks').select(
+            'id, title, assigned_to, created_by, status, priority_score, difficulty_score'
+        ).eq('id', task_id).execute()
+
+        if not task_response.data:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Task not found"
+            )
+
+        task = task_response.data[0]
+
+        # 2. Validate user can assign this task
+        can_assign = False
+
+        # User created the task
+        if task['created_by'] == user_id:
+            can_assign = True
+        else:
+            # Check if user is a manager of the task creator
+            manager_check = supabase_client.table('user_reporting').select(
+                'manager_id'
+            ).eq('manager_id', user_id).eq('employee_id', task['created_by']).execute()
+
+            if manager_check.data and len(manager_check.data) > 0:
+                can_assign = True
+
+        if not can_assign:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="You can only assign tasks you created or manage"
+            )
+
+        # 3. Validate task is not already assigned to someone else
+        if task.get('assigned_to') and task['assigned_to'] != assignment.employee_id:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Task is already assigned to another employee"
+            )
+
+        # 4. Validate employee is managed by current user
+        reporting_check = supabase_client.table('user_reporting').select(
+            'employee_id'
+        ).eq('manager_id', user_id).eq('employee_id', assignment.employee_id).execute()
+
+        if not reporting_check.data or len(reporting_check.data) == 0:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="You can only assign tasks to employees you manage"
+            )
+
+        # 5. Update task assignment
+        update_data = {
+            'assigned_to': assignment.employee_id,
+            'updated_at': datetime.now(timezone.utc).isoformat()
+        }
+
+        # If task was unassigned, set status to in_progress when assigning
+        if not task.get('assigned_to'):
+            update_data['status'] = 'in_progress'
+
+        task_update_response = supabase_client.table('tasks').update(
+            update_data
+        ).eq('id', task_id).execute()
+
+        if not task_update_response.data:
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="Failed to update task assignment"
+            )
+
+        # 6. Create assignment record
+        assignment_record_data = {
+            'task_id': task_id,
+            'user_id': assignment.employee_id,
+            'assigned_by': user_id,
+            'assigned_at': datetime.now(timezone.utc).isoformat()
+        }
+
+        assignment_response = supabase_client.table('assignments').insert(
+            assignment_record_data
+        ).execute()
+
+        if not assignment_response.data:
+            print(f"⚠️ Warning: Failed to create assignment record for task {task_id}")
+
+        # 7. Update employee's workload score
+        try:
+            workload_calculator = get_workload_score_calculator()
+            success = workload_calculator.update_employee_workload_score(
+                assignment.employee_id, supabase_client
+            )
+            if success:
+                print(f"✅ Updated workload score for employee {assignment.employee_id}")
+            else:
+                print(f"⚠️ Failed to update workload score for employee {assignment.employee_id}")
+        except Exception as e:
+            print(f"⚠️ Error updating workload score for employee {assignment.employee_id}: {e}")
+            # Don't fail the assignment if workload update fails
+
+        # 8. Success response
+        return {
+            "success": True,
+            "message": "Task assigned successfully",
+            "data": {
+                "task_id": task_id,
+                "assigned_to": assignment.employee_id,
+                "assignment_record": assignment_response.data[0] if assignment_response.data else None
+            }
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"Task assignment error: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Internal server error occurred while assigning task"
+        )
+
+
+@router.get("/employees/assignable")
+async def get_assignable_employees(
+    current_user: dict = Depends(get_current_user)
+):
+    """
+    Get list of employees that can be assigned tasks by the current user.
+
+    Only returns employees who are mapped to the current user in user_reporting.
+    """
+    try:
+        user_id = current_user.id
+        supabase_client = get_supabase_admin()
+
+        # Get employees managed by current user
+        reporting_response = supabase_client.table('user_reporting').select(
+            'employee_id'
+        ).eq('manager_id', user_id).execute()
+
+        if not reporting_response.data:
+            return {
+                "success": True,
+                "message": "No employees found under your management",
+                "data": []
+            }
+
+        employee_ids = [r['employee_id'] for r in reporting_response.data]
+
+        # Get employee details
+        employees_response = supabase_client.table('user_miles').select(
+            'auth_id, name, email, productivity_score, workload'
+        ).in_('auth_id', employee_ids).execute()
+
+        employees = employees_response.data or []
+
+        # Add active task count to each employee
+        for employee in employees:
+            try:
+                # Get active task count
+                tasks_response = supabase_client.table('tasks').select(
+                    'id, status'
+                ).eq('assigned_to', employee['auth_id']).execute()
+
+                active_tasks = [t for t in (tasks_response.data or []) if t.get('status') not in ['done', 'review']]
+                employee['active_task_count'] = len(active_tasks)
+            except Exception as e:
+                print(f"⚠️ Error getting task count for employee {employee['auth_id']}: {e}")
+                employee['active_task_count'] = 0
+
+        return {
+            "success": True,
+            "message": f"Found {len(employees)} assignable employees",
+            "data": employees
+        }
+
+    except Exception as e:
+        print(f"Get assignable employees error: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Internal server error occurred while fetching employees"
         )
 
 
@@ -361,10 +644,36 @@ async def create_employee(
             else:
                 # User doesn't have a profile - create one
                 try:
-                    # Process skill_vector from comma-separated string to array (same logic as tasks)
-                    skill_vector_array = []
+                    # Process skills: store both names and embeddings
+                    skill_names = []
+                    skill_embeddings = None
+
                     if employee.skill_vector and employee.skill_vector.strip():
-                        skill_vector_array = [skill.strip() for skill in employee.skill_vector.split(',') if skill.strip()]
+                        # Extract skill names from comma-separated string
+                        skill_names = [skill.strip() for skill in employee.skill_vector.split(',') if skill.strip()]
+
+                        # Generate embeddings for the skills
+                        try:
+                            skill_embeddings = create_skill_embeddings(employee.skill_vector)
+                            print(f"✅ Generated embeddings for {len(skill_embeddings) if skill_embeddings else 0} skills")
+                        except Exception as embedding_error:
+                            print(f"⚠️ Failed to generate embeddings: {embedding_error}")
+                            print("📝 Continuing with skill names only - embeddings will be generated later if needed")
+                            skill_embeddings = None
+
+                    # Store only the vectors in skill_vector field
+                    skill_vector_data = None
+                    if skill_embeddings:
+                        skill_vector_data = skill_embeddings  # Store just the vectors array
+                    else:
+                        skill_vector_data = []  # Empty array if no embeddings
+
+                    # Calculate productivity score based on experience and tenure
+                    productivity_score = calculate_employee_productivity_score(
+                        experience_years=employee.experience_years,
+                        tenure_years=employee.tenure
+                    )
+                    print(f"✅ Calculated productivity score: {productivity_score}")
 
                     employee_data = {
                         'auth_id': employee_id,
@@ -372,8 +681,11 @@ async def create_employee(
                         'name': employee.name,
                         'role': 'employee',
                         'profile_picture': employee.profile_picture,
-                        'skill_vector': skill_vector_array if skill_vector_array else None,
-                        'productivity_score': 0.0
+                        'skill_vector': skill_vector_data,  # Store vectors array as JSONB
+                        'experience_years': employee.experience_years or {},  # Store experience data as JSONB
+                        'tenure': employee.tenure or {},  # Store tenure data as JSONB
+                        'productivity_score': productivity_score,
+                        'workload': 0  # Initialize workload to 0
                     }
 
                     profile_response = supabase_admin_client.table("user_miles").insert(employee_data).execute()

@@ -5,8 +5,8 @@ import uvicorn
 import os
 from dotenv import load_dotenv
 from datetime import date, datetime, timedelta
-from pydantic import BaseModel, EmailStr
-from typing import Optional, List
+from pydantic import BaseModel, EmailStr, Field
+from typing import Optional, List, Dict
 from supabase import create_client, Client
 
 # Load environment variables
@@ -72,35 +72,36 @@ class UserResponse(BaseModel):
 class TaskBase(BaseModel):
     title: str
     description: Optional[str] = None
-    priority: int = 1
-    difficulty_level: int = 1
+    priority_score: int = 1
+    difficulty_score: int = 1
     required_skills: Optional[List[str]] = None
     status: str = "todo"
     assigned_to: Optional[str] = None
     due_date: Optional[datetime] = None
-    notes: Optional[str] = None
-    progress: int = 0
+    rating_score: int = 0
+    justified: bool = False
+    bonus: bool = False
 
 class TaskUpdate(BaseModel):
     title: Optional[str] = None
     description: Optional[str] = None
-    priority: Optional[int] = None
-    difficulty_level: Optional[int] = None
+    priority_score: Optional[int] = None
+    difficulty_score: Optional[int] = None
     required_skills: Optional[List[str]] = None
     status: Optional[str] = None
     assigned_to: Optional[str] = None
     due_date: Optional[datetime] = None
-    notes: Optional[str] = None
-    progress: Optional[int] = None
     progress: Optional[int] = None
 
 class TaskResponse(TaskBase):
     id: str
     created_by: str
     status: str
-    progress: int
     created_at: datetime
     updated_at: datetime
+    rating_score: int
+    justified: bool
+    bonus: bool
     is_overdue: Optional[bool] = None
 
 # Employee-related models
@@ -111,6 +112,8 @@ class EmployeeBase(BaseModel):
     position: Optional[str] = None
     phone: Optional[str] = None
     skill_vector: Optional[str] = None
+    experience_years: Optional[Dict[str, int]] = Field(default_factory=dict, description="Experience in months for each skill")
+    tenure: Optional[Dict[str, int]] = Field(default_factory=dict, description="Tenure in months for each skill at company")
 
 class EmployeeCreate(EmployeeBase):
     pass
@@ -679,7 +682,7 @@ async def get_dashboard_stats(current_user: dict = Depends(get_current_user)):
         profile_id = current_user['id']
 
         # Get task statistics
-        tasks_response = supabase_admin.table('tasks').select('status, priority, deadline, progress').eq('created_by', profile_id).execute()
+        tasks_response = supabase_admin.table('tasks').select('status, priority_score, due_date').eq('created_by', profile_id).execute()
         tasks = tasks_response.data or []
 
         # Calculate task stats
@@ -689,17 +692,17 @@ async def get_dashboard_stats(current_user: dict = Depends(get_current_user)):
         in_progress_tasks = len([t for t in tasks if t['status'] == 'in_progress'])
         cancelled_tasks = len([t for t in tasks if t['status'] == 'cancelled'])
 
-        # Priority stats
-        urgent_tasks = len([t for t in tasks if t['priority'] == 'urgent'])
-        high_priority_tasks = len([t for t in tasks if t['priority'] == 'high'])
+        # Priority stats (priority_score: 1=low, 2=medium, 3=high, 4=urgent, 5=critical)
+        urgent_tasks = len([t for t in tasks if t['priority_score'] >= 4])  # urgent and critical
+        high_priority_tasks = len([t for t in tasks if t['priority_score'] == 3])  # high only
 
-        # Overdue tasks (deadline < now and not completed)
+        # Overdue tasks (due_date < now and not done)
         now = datetime.utcnow()
         overdue_tasks = len([
             t for t in tasks
-            if t.get('deadline') and t['deadline'] and
-               datetime.fromisoformat(str(t['deadline']).replace('Z', '+00:00')) < now and
-               t['status'] != 'completed'
+            if t.get('due_date') and t['due_date'] and
+               datetime.fromisoformat(str(t['due_date']).replace('Z', '+00:00')) < now and
+               t['status'] != 'done'
         ])
 
         # Completion rate
@@ -757,9 +760,6 @@ async def create_task(task_data: TaskBase, current_user = Depends(get_current_us
         task_dict = task_data.dict()
         task_dict['created_by'] = user_id
         task_dict['assigned_to'] = task_dict.get('assigned_to') or user_id
-        # Ensure progress is set (default to 0)
-        if 'progress' not in task_dict:
-            task_dict['progress'] = 0
 
         # Convert date objects to ISO format for Supabase
         if task_dict.get('due_date') and isinstance(task_dict['due_date'], datetime):
@@ -772,11 +772,6 @@ async def create_task(task_data: TaskBase, current_user = Depends(get_current_us
             raise HTTPException(status_code=500, detail="Failed to create task")
 
         created_task = response.data[0]
-
-        # Ensure progress field exists (fallback for databases without the field yet)
-        if 'progress' not in created_task:
-            created_task['progress'] = 0
-
         return TaskResponse(**created_task)
 
     except HTTPException:
@@ -803,7 +798,7 @@ async def get_tasks(
         if status:
             query = query.eq('status', status)
         if priority:
-            query = query.eq('priority', priority)
+            query = query.eq('priority_score', priority)
         if search:
             # Search in title and description using a simpler approach
             search_term = search.lower()
@@ -819,15 +814,11 @@ async def get_tasks(
         for task in tasks:
             task_dict = dict(task)
 
-            # Ensure progress field exists (fallback for databases without the field yet)
-            if 'progress' not in task_dict:
-                task_dict['progress'] = 0
-
-            if task.get('deadline') and task['deadline']:
+            if task.get('due_date') and task['due_date']:
                 try:
-                    deadline_str = str(task['deadline']).replace('Z', '+00:00')
-                    deadline_dt = datetime.fromisoformat(deadline_str)
-                    task_dict['is_overdue'] = deadline_dt < now and task['status'] != 'completed'
+                    due_date_str = str(task['due_date']).replace('Z', '+00:00')
+                    due_date_dt = datetime.fromisoformat(due_date_str)
+                    task_dict['is_overdue'] = due_date_dt < now and task['status'] != 'done'
                 except (ValueError, TypeError):
                     task_dict['is_overdue'] = False
             else:
@@ -855,6 +846,88 @@ async def get_tasks(
         raise HTTPException(status_code=500, detail="Failed to fetch tasks")
 
 
+@app.get("/api/tasks/created")
+async def get_created_tasks(current_user = Depends(get_current_user)):
+    """Get tasks created by the current user"""
+    try:
+        user_id = current_user.id
+
+        response = supabase_admin.table('tasks').select('*').eq('created_by', user_id).execute()
+        tasks = response.data or []
+
+        # Format tasks (reuse the same formatting logic)
+        formatted_tasks = []
+        for task in tasks:
+            formatted_task = {
+                "id": task["id"],
+                "title": task["title"],
+                "description": task["description"],
+                "status": task["status"],
+                "priority_score": task["priority_score"],
+                "difficulty_score": task["difficulty_score"],
+                "project_id": task["project_id"],
+                "assigned_to": task["assigned_to"],
+                "created_by": task["created_by"],
+                "due_date": task["due_date"],
+                "created_at": task["created_at"],
+                "updated_at": task["updated_at"],
+                "rating_score": task.get("rating_score", 0),
+                "justified": task.get("justified", False),
+                "bonus": task.get("bonus", False),
+                "required_skills": task.get("required_skills", []),
+                "skill_embedding": task.get("skill_embedding", []),
+                "is_overdue": False
+            }
+
+            # Calculate if task is overdue
+            if task.get("due_date") and task["status"] not in ["completed", "done"]:
+                try:
+                    due_date = datetime.fromisoformat(task["due_date"].replace('Z', '+00:00'))
+                    if due_date < datetime.now(due_date.tzinfo):
+                        formatted_task["is_overdue"] = True
+                except:
+                    pass
+
+            formatted_tasks.append(formatted_task)
+
+        return {"tasks": formatted_tasks, "total": len(formatted_tasks)}
+
+    except Exception as e:
+        print(f"Get created tasks error: {e}")
+        raise HTTPException(status_code=500, detail="Failed to fetch created tasks")
+
+
+@app.get("/api/projects/created")
+async def get_created_projects(current_user = Depends(get_current_user)):
+    """Get projects created by the current user"""
+    try:
+        user_id = current_user.id
+
+        response = supabase_admin.table('projects').select('*').eq('created_by', user_id).execute()
+        projects = response.data or []
+
+        # Format projects
+        formatted_projects = []
+        for project in projects:
+            formatted_project = {
+                "id": project["id"],
+                "name": project["name"],
+                "description": project["description"],
+                "created_by": project["created_by"],
+                "deadline": project["deadline"],
+                "status": project["status"],
+                "created_at": project["created_at"]
+            }
+
+            formatted_projects.append(formatted_project)
+
+        return {"projects": formatted_projects, "total": len(formatted_projects)}
+
+    except Exception as e:
+        print(f"Get created projects error: {e}")
+        raise HTTPException(status_code=500, detail="Failed to fetch created projects")
+
+
 @app.get("/api/tasks/{task_id}", response_model=TaskResponse)
 async def get_task(task_id: str, current_user = Depends(get_current_user)):
     """Get a specific task assigned to the current user"""
@@ -868,11 +941,6 @@ async def get_task(task_id: str, current_user = Depends(get_current_user)):
             raise HTTPException(status_code=404, detail="Task not found")
 
         task = response.data[0]
-
-        # Ensure progress field exists (fallback for databases without the field yet)
-        if 'progress' not in task:
-            task['progress'] = 0
-
         return TaskResponse(**task)
 
     except HTTPException:
@@ -911,10 +979,8 @@ async def update_task(task_id: str, task_data: TaskUpdate, current_user = Depend
         update_dict = task_data.dict(exclude_unset=True)
 
         # Convert date/datetime objects to ISO format strings for Supabase
-        if 'start_date' in update_dict and isinstance(update_dict['start_date'], date):
-            update_dict['start_date'] = update_dict['start_date'].isoformat()
-        if 'deadline' in update_dict and isinstance(update_dict['deadline'], datetime):
-            update_dict['deadline'] = update_dict['deadline'].isoformat()
+        if 'due_date' in update_dict and isinstance(update_dict['due_date'], datetime):
+            update_dict['due_date'] = update_dict['due_date'].isoformat()
 
         update_dict['updated_at'] = datetime.utcnow().isoformat()
 
@@ -924,10 +990,6 @@ async def update_task(task_id: str, task_data: TaskUpdate, current_user = Depend
             raise HTTPException(status_code=500, detail="Failed to update task")
 
         updated_task = response.data[0]
-
-        # Ensure progress field exists (fallback for databases without the field yet)
-        if 'progress' not in updated_task:
-            updated_task['progress'] = 0
 
         # Assignment creation is now handled by frontend via separate API call
         # This allows for better error handling and separation of concerns

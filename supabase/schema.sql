@@ -8,19 +8,24 @@ CREATE TYPE IF NOT EXISTS user_role AS ENUM ('employee', 'manager', 'admin');
 -- 2. USER_MILES (formerly public.users)
 -- =====================================================
 CREATE TABLE IF NOT EXISTS public.user_miles (
-  auth_id UUID PRIMARY KEY REFERENCES auth.users(id) ON DELETE CASCADE,
-  email TEXT UNIQUE NOT NULL,
+  id UUID NOT NULL DEFAULT gen_random_uuid(),
+  auth_id UUID NOT NULL,
+  email TEXT NOT NULL,
   name TEXT NOT NULL,
-  role user_role DEFAULT 'employee' NOT NULL,
-  profile_picture TEXT,
-
-  -- AI / RL fields
-  skill_vector JSONB,
-  productivity_score FLOAT DEFAULT 0.0,
-
-  created_at TIMESTAMPTZ DEFAULT NOW(),
-  updated_at TIMESTAMPTZ DEFAULT NOW()
-);
+  role user_role NOT NULL DEFAULT 'employee'::user_role,
+  profile_picture TEXT NULL,
+  skill_vector JSONB NULL,
+  productivity_score DOUBLE PRECISION NULL DEFAULT 0.0,
+  created_at TIMESTAMP WITH TIME ZONE NULL DEFAULT now(),
+  updated_at TIMESTAMP WITH TIME ZONE NULL DEFAULT now(),
+  experience_years JSONB NOT NULL DEFAULT '{}'::jsonb,
+  tenure JSONB NOT NULL DEFAULT '{}'::jsonb,
+  workload INTEGER NOT NULL DEFAULT 0,
+  CONSTRAINT user_miles_pkey PRIMARY KEY (id),
+  CONSTRAINT user_miles_auth_id_key UNIQUE (auth_id),
+  CONSTRAINT user_miles_email_key UNIQUE (email),
+  CONSTRAINT user_miles_auth_id_fkey FOREIGN KEY (auth_id) REFERENCES auth.users (id) ON DELETE CASCADE
+) TABLESPACE pg_default;
 
 
 -- =====================================================
@@ -59,29 +64,51 @@ CREATE TABLE IF NOT EXISTS public.projects (
 -- 5. TASKS
 -- =====================================================
 CREATE TABLE IF NOT EXISTS public.tasks (
-  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  project_id UUID REFERENCES public.projects(id),
-
+  id UUID NOT NULL DEFAULT gen_random_uuid(),
+  project_id UUID NULL,
   title TEXT NOT NULL,
-  description TEXT,
-
-  priority INT DEFAULT 1 CHECK (priority BETWEEN 1 AND 5),
-  difficulty_level INT DEFAULT 1 CHECK (difficulty_level BETWEEN 1 AND 10),
-  required_skills JSONB,
-
-  status TEXT DEFAULT 'todo'
-    CHECK (status IN ('todo', 'in_progress', 'review', 'done')),
-
-  assigned_to UUID REFERENCES public.user_miles(auth_id),
-  created_by UUID REFERENCES public.user_miles(auth_id),
-  due_date TIMESTAMPTZ,
-  notes TEXT,
-
-  progress INT DEFAULT 0 CHECK (progress BETWEEN 0 AND 100),
-
-  created_at TIMESTAMPTZ DEFAULT NOW(),
-  updated_at TIMESTAMPTZ DEFAULT NOW()
-);
+  description TEXT NULL,
+  priority_score INTEGER NULL DEFAULT 1,
+  difficulty_score INTEGER NULL DEFAULT 1,
+  required_skills JSONB NULL,
+  status TEXT NULL DEFAULT 'todo'::text,
+  assigned_to UUID NULL,
+  created_by UUID NULL,
+  due_date TIMESTAMP WITH TIME ZONE NULL,
+  created_at TIMESTAMP WITH TIME ZONE NULL DEFAULT now(),
+  updated_at TIMESTAMP WITH TIME ZONE NULL DEFAULT now(),
+  rating_score INTEGER NULL DEFAULT 0,
+  justified BOOLEAN NULL DEFAULT false,
+  bonus BOOLEAN NULL DEFAULT false,
+  skill_embedding JSONB NULL,
+  CONSTRAINT tasks_pkey PRIMARY KEY (id),
+  CONSTRAINT tasks_project_id_fkey FOREIGN KEY (project_id) REFERENCES projects (id),
+  CONSTRAINT tasks_difficulty_level_check CHECK (
+    (
+      (difficulty_score >= 1)
+      AND (difficulty_score <= 10)
+    )
+  ),
+  CONSTRAINT tasks_priority_check CHECK (
+    (
+      (priority_score >= 1)
+      AND (priority_score <= 5)
+    )
+  ),
+  CONSTRAINT tasks_rating_score_check CHECK ((rating_score <= 5)),
+  CONSTRAINT tasks_status_check CHECK (
+    (
+      status = ANY (
+        ARRAY[
+          'todo'::text,
+          'in_progress'::text,
+          'review'::text,
+          'done'::text
+        ]
+      )
+    )
+  )
+) TABLESPACE pg_default;
 
 
 -- =====================================================

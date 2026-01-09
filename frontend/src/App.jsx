@@ -5,6 +5,8 @@ import Dashboard from './pages/Dashboard'
 import Home from './pages/Home'
 import AuthCallback from './pages/AuthCallback'
 import Calendar from './pages/Calendar'
+import EmployeeManagement from './pages/EmployeeManagement'
+import Projects from './pages/Projects'
 import './App.css'
 
 // Protected Route Component
@@ -52,7 +54,8 @@ const AppRouter = () => {
         <Route path="/home" element={<Home />} />
         <Route path="/calendar" element={<Calendar />} />
         <Route path="/auth/callback" element={<AuthCallback />} />
-
+        <Route path="/employees" element={<EmployeeManagement />} />
+        <Route path="/projects" element={<Projects />} />
 
         {/* Catch all route */}
         <Route path="*" element={<Navigate to="/" replace />} />
