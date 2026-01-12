@@ -118,8 +118,8 @@ CREATE TABLE IF NOT EXISTS public.assignments (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
 
   task_id UUID REFERENCES public.tasks(id),
-  user_id UUID REFERENCES public.user_miles(auth_id),
-  assigned_by UUID REFERENCES public.user_miles(auth_id),
+  user_id UUID REFERENCES public.user_miles(id),
+  assigned_by UUID REFERENCES public.user_miles(id),
 
   assigned_at TIMESTAMPTZ DEFAULT NOW(),
   completed_at TIMESTAMPTZ,
@@ -129,6 +129,27 @@ CREATE TABLE IF NOT EXISTS public.assignments (
   outcome_score FLOAT,
   notes TEXT
 );
+
+-- Migration: Update existing assignments to use user_miles.id instead of auth_id
+-- This ensures existing data works with the new foreign key references
+DO $$
+BEGIN
+  -- Update user_id column to reference user_miles.id
+  UPDATE public.assignments
+  SET user_id = um.id
+  FROM public.user_miles um
+  WHERE assignments.user_id = um.auth_id::text;
+
+  -- Update assigned_by column to reference user_miles.id
+  UPDATE public.assignments
+  SET assigned_by = um.id
+  FROM public.user_miles um
+  WHERE assignments.assigned_by = um.auth_id::text;
+EXCEPTION
+  WHEN others THEN
+    -- Log the error but don't fail the migration
+    RAISE NOTICE 'Migration of assignments table completed with warnings: %', SQLERRM;
+END $$;
 
 
 -- =====================================================

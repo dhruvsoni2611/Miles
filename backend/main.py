@@ -4,7 +4,7 @@ from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 import uvicorn
 import os
 from dotenv import load_dotenv
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, timedelta, timezone
 from pydantic import BaseModel, EmailStr, Field
 from typing import Optional, List, Dict
 from supabase import create_client, Client
@@ -69,6 +69,9 @@ class UserResponse(BaseModel):
     created_at: str
 
 # Task-related models
+class TaskCompletionConfirmation(BaseModel):
+    confirm: bool = Field(True, description="Confirmation to complete the task")
+
 class TaskBase(BaseModel):
     title: str
     description: Optional[str] = None
@@ -955,10 +958,16 @@ async def update_task(task_id: str, task_data: TaskUpdate, current_user = Depend
     try:
         # Check if task exists and user can update it (created by user OR assigned to user)
         user_id = current_user.id
-        existing_response = supabase_admin.table('tasks').select('id').or_(f'created_by.eq.{user_id},assigned_to.eq.{user_id}').eq('id', task_id).execute()
+        existing_response = supabase_admin.table('tasks').select('id, status').or_(f'created_by.eq.{user_id},assigned_to.eq.{user_id}').eq('id', task_id).execute()
 
         if not existing_response.data or len(existing_response.data) == 0:
             raise HTTPException(status_code=404, detail="Task not found or access denied")
+
+        current_task_status = existing_response.data[0]['status']
+
+        # Prevent changing status from 'done' (completed tasks cannot be modified)
+        if current_task_status == 'done' and task_data.status and task_data.status != 'done':
+            raise HTTPException(status_code=400, detail="Completed tasks cannot be moved to another status")
 
         # Validate required skills if provided
         if task_data.required_skills is not None and len(task_data.required_skills) > 0:
@@ -991,6 +1000,54 @@ async def update_task(task_id: str, task_data: TaskUpdate, current_user = Depend
 
         updated_task = response.data[0]
 
+        # Check if task was completed (status changed to 'done') and record RL feedback
+        if 'status' in update_dict and update_dict['status'] == 'done':
+            try:
+                # Get full task details for RL feedback
+                task_details_response = supabase_admin.table('tasks').select(
+                    'id, assigned_to, due_date, difficulty_score'
+                ).eq('id', task_id).execute()
+
+                if task_details_response.data:
+                    task_details = task_details_response.data[0]
+
+                    # Calculate RL metrics
+                    r_completion = True
+                    r_ontime = True
+                    r_hardtask_bonus = task_details.get('difficulty_score', 1) > 5
+
+                    # Calculate overdue days
+                    overdue_days = 0
+                    if task_details.get('due_date'):
+                        due_date = datetime.fromisoformat(task_details['due_date'].replace('Z', '+00:00'))
+                        now = datetime.now(timezone.utc)
+                        if now > due_date:
+                            r_ontime = False
+                            overdue_days = (now - due_date).days
+
+                    # Insert RL feedback
+                    rl_data = {
+                        'task_id': task_id,
+                        'employee_id': task_details.get('assigned_to'),
+                        'r_completion': r_completion,
+                        'r_ontime': r_ontime,
+                        'r_good_behaviour': False,  # Will be updated by completion rating
+                        'p_overdue': overdue_days > 0,
+                        'p_rework': 0,
+                        'p_failure': False,
+                        'r_hardtask_bonus': r_hardtask_bonus
+                    }
+
+                    rl_response = supabase_admin.table('rl_miles').insert(rl_data).execute()
+                    if rl_response.data:
+                        print(f"✅ RL feedback recorded for task {task_id}")
+                    else:
+                        print(f"⚠️ Failed to record RL feedback for task {task_id}")
+
+            except Exception as e:
+                print(f"⚠️ Error recording RL feedback: {e}")
+                # Don't fail the task update if RL recording fails
+
         # Assignment creation is now handled by frontend via separate API call
         # This allows for better error handling and separation of concerns
 
@@ -1001,6 +1058,181 @@ async def update_task(task_id: str, task_data: TaskUpdate, current_user = Depend
     except Exception as e:
         print(f"Update task error: {e}")
         raise HTTPException(status_code=500, detail="Failed to update task")
+
+
+@app.post("/api/tasks/{task_id}/complete")
+async def complete_task_with_auto_rl_feedback(
+    task_id: str,
+    confirmation: TaskCompletionConfirmation,
+    current_user = Depends(get_current_user)
+):
+    """Complete task and automatically calculate RL feedback based on task performance"""
+    try:
+        # Get comprehensive task details
+        task_response = supabase_admin.table('tasks').select(
+            'id, title, assigned_to, created_by, due_date, difficulty_score, status, created_at, priority_score'
+        ).eq('id', task_id).execute()
+
+        if not task_response.data:
+            raise HTTPException(status_code=404, detail="Task not found")
+
+        task = task_response.data[0]
+
+        # Verify user can complete this task (assigned to them or created by them)
+        user_id = current_user.id
+        can_complete = False
+
+        if task.get('assigned_to') == user_id or task.get('created_by') == user_id:
+            can_complete = True
+        else:
+            # Check if user is manager of the task creator
+            manager_check = supabase_admin.table('user_reporting').select(
+                'manager_id'
+            ).eq('manager_id', user_id).eq('employee_id', task.get('created_by')).execute()
+
+            if manager_check.data and len(manager_check.data) > 0:
+                can_complete = True
+
+        if not can_complete:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="You can only complete tasks assigned to you or that you created"
+            )
+
+        # Calculate completion time (days from creation to completion)
+        completion_time_days = 0
+        if task.get('created_at'):
+            created_at = datetime.fromisoformat(task['created_at'].replace('Z', '+00:00'))
+            now = datetime.now(timezone.utc)
+            completion_time_days = (now - created_at).days
+
+        # Calculate RL metrics based on task performance
+
+        # 1. COMPLETION REWARD: Always true for completed tasks
+        r_completion = True
+
+        # 2. ON-TIME REWARD: Check if completed before due date
+        r_ontime = True
+        overdue_days = 0
+        if task.get('due_date'):
+            due_date = datetime.fromisoformat(task['due_date'].replace('Z', '+00:00'))
+            if now > due_date:
+                r_ontime = False
+                overdue_days = (now - due_date).days
+
+        # 3. GOOD BEHAVIOUR REWARD: Based on completion time vs difficulty
+        r_good_behaviour = False
+        difficulty = task.get('difficulty_score', 1)
+
+        # Logic: Good behaviour if completed within reasonable time for difficulty
+        expected_days = max(1, difficulty * 2)  # Expected: difficulty * 2 days
+        if completion_time_days <= expected_days:
+            r_good_behaviour = True
+
+        # 4. HARD TASK BONUS: Extra reward for completing difficult tasks
+        r_hardtask_bonus = difficulty > 5
+
+        # 5. EFFICIENCY BONUS: Bonus for completing high-priority tasks quickly
+        priority = task.get('priority_score', 2)
+        r_efficiency_bonus = priority >= 4 and completion_time_days <= 2  # High priority completed within 2 days
+
+        # 6. PENALTIES
+        p_overdue = overdue_days > 0
+        p_rework = 0  # Will be updated if task gets reworked later
+        p_failure = False  # This is completion, so no failure
+
+        # 7. SPEED BONUS: Bonus for completing tasks very quickly
+        r_speed_bonus = completion_time_days <= 1 and difficulty <= 3
+
+        # Update task status to 'done'
+        if task.get('status') != 'done':
+            update_response = supabase_admin.table('tasks').update({
+                'status': 'done',
+                'updated_at': datetime.utcnow().isoformat()
+            }).eq('id', task_id).execute()
+
+            if not update_response.data:
+                raise HTTPException(status_code=500, detail="Failed to update task status")
+
+            # Update assignments table to mark completion
+            if task.get('assigned_to'):
+                try:
+                    # Get user_miles.id for the assigned employee
+                    employee_profile = supabase_admin.table('user_miles').select('id').eq('auth_id', task['assigned_to']).execute()
+                    if employee_profile.data:
+                        employee_id = employee_profile.data[0]['id']
+                        # Update the assignment record with completion timestamp
+                        assignment_update = supabase_admin.table('assignments').update({
+                            'completed_at': datetime.now(timezone.utc).isoformat()
+                        }).eq('task_id', task_id).eq('user_id', employee_id).execute()
+                        if not assignment_update.data:
+                            print(f"⚠️ Warning: Failed to update assignment completion for task {task_id}")
+                except Exception as e:
+                    print(f"⚠️ Error updating assignment completion: {e}")
+
+        # Get the correct user_miles.id for the assigned employee (assigned_to is auth_id)
+        employee_id_for_rl = None
+        if task.get('assigned_to'):
+            user_profile = supabase_admin.table('user_miles').select('id').eq('auth_id', task['assigned_to']).execute()
+            if user_profile.data and len(user_profile.data) > 0:
+                employee_id_for_rl = user_profile.data[0]['id']
+
+        # Insert RL feedback according to your exact schema
+        rl_data = {
+            'task_id': task_id,
+            'employee_id': employee_id_for_rl,
+            'r_completion': r_completion,
+            'r_ontime': r_ontime,
+            'r_good_behaviour': r_good_behaviour,
+            'p_overdue': p_overdue,
+            'p_rework': p_rework,
+            'p_failure': p_failure
+        }
+
+        # Insert RL feedback (your schema doesn't have unique constraint on task_id)
+        rl_response = supabase_admin.table('rl_miles').insert(rl_data).execute()
+
+        if not rl_response.data:
+            print(f"⚠️ Warning: RL feedback upsert failed for task {task_id}")
+
+        # Return detailed feedback about what was calculated (only schema fields)
+        calculated_metrics = {
+            'completion_time_days': completion_time_days,
+            'overdue_days': overdue_days,
+            'difficulty': difficulty,
+            'priority': priority,
+            'rewards': {
+                'r_completion': r_completion,
+                'r_ontime': r_ontime,
+                'r_good_behaviour': r_good_behaviour
+            },
+            'penalties': {
+                'p_overdue': p_overdue,
+                'p_rework': p_rework,
+                'p_failure': p_failure
+            }
+        }
+
+        return {
+            "success": True,
+            "message": "Task completed successfully with automatic performance evaluation",
+            "data": {
+                "task_id": task_id,
+                "calculated_metrics": calculated_metrics,
+                "rl_feedback_recorded": bool(rl_response.data)
+            }
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"Task completion error: {e}")
+        print(f"Task ID: {task_id}")
+        print(f"User ID: {current_user.id}")
+        import traceback
+        print(f"Traceback: {traceback.format_exc()}")
+        raise HTTPException(status_code=500, detail="Failed to complete task")
+
 
 @app.delete("/api/tasks/{task_id}")
 async def delete_task(task_id: str, current_user = Depends(get_current_user)):
@@ -1191,12 +1423,13 @@ async def get_managed_employees(current_user = Depends(get_current_user)):
 
         # Fetch employee details from user_miles table
         employees_response = supabase_admin.table('user_miles') \
-            .select('auth_id, name, email, role, profile_picture') \
+            .select('id, auth_id, name, email, role, profile_picture') \
             .in_('auth_id', employee_ids) \
             .execute()
 
         employees = employees_response.data or []
         print(f"Found {len(employees)} employees")
+        print(f"Sample employee data: {employees[0] if employees else 'None'}")
 
         # Sort by name
         employees.sort(key=lambda x: x.get('name', '').lower())

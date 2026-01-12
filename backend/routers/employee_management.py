@@ -301,7 +301,14 @@ async def assign_task_to_employee(
 
         task = task_response.data[0]
 
-        # 2. Validate user can assign this task
+        # 2. Validate task is not completed
+        if task['status'] == 'done':
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Cannot assign completed tasks"
+            )
+
+        # 3. Validate user can assign this task
         can_assign = False
 
         # User created the task
@@ -340,9 +347,12 @@ async def assign_task_to_employee(
                 detail="You can only assign tasks to employees you manage"
             )
 
-        # 5. Update task assignment
+        # 5. Employee ID from frontend is already auth_id, use it directly
+        employee_auth_id = assignment.employee_id
+
+        # Update task assignment
         update_data = {
-            'assigned_to': assignment.employee_id,
+            'assigned_to': employee_auth_id,
             'updated_at': datetime.now(timezone.utc).isoformat()
         }
 
@@ -360,11 +370,24 @@ async def assign_task_to_employee(
                 detail="Failed to update task assignment"
             )
 
-        # 6. Create assignment record
+        # 6. Get user_miles.id for both assigned employee and assigner
+        assigner_profile = supabase_client.table('user_miles').select('id').eq('auth_id', user_id).execute()
+        employee_profile = supabase_client.table('user_miles').select('id').eq('auth_id', assignment.employee_id).execute()
+
+        if not assigner_profile.data or not employee_profile.data:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Invalid assigner or employee ID"
+            )
+
+        assigned_employee_id = employee_profile.data[0]['id']
+        assigner_id = assigner_profile.data[0]['id']
+
+        # Create assignment record
         assignment_record_data = {
             'task_id': task_id,
-            'user_id': assignment.employee_id,
-            'assigned_by': user_id,
+            'user_id': assigned_employee_id,
+            'assigned_by': assigner_id,
             'assigned_at': datetime.now(timezone.utc).isoformat()
         }
 
@@ -439,7 +462,7 @@ async def get_assignable_employees(
 
         # Get employee details
         employees_response = supabase_client.table('user_miles').select(
-            'auth_id, name, email, productivity_score, workload'
+            'id, auth_id, name, email, productivity_score, workload'
         ).in_('auth_id', employee_ids).execute()
 
         employees = employees_response.data or []

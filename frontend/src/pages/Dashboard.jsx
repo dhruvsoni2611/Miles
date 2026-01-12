@@ -84,6 +84,11 @@ const Dashboard = () => {
   const [taskToAssign, setTaskToAssign] = useState(null);
   const [assigningTask, setAssigningTask] = useState(false);
 
+  // Task completion modal state
+  const [showCompletionModal, setShowCompletionModal] = useState(false);
+  const [taskToComplete, setTaskToComplete] = useState(null);
+  const [submittingCompletion, setSubmittingCompletion] = useState(false);
+
   useEffect(() => {
     // Only check auth after AuthContext has finished loading
     if (!authLoading) {
@@ -256,7 +261,20 @@ const Dashboard = () => {
         return;
       }
 
+      // Prevent moving completed tasks to other statuses
+      if (taskData.status === 'done' && newStatus !== 'done') {
+        alert('Completed tasks cannot be moved to another status');
+        return;
+      }
+
       console.log('Updating task status:', taskData.id, 'from', taskData.status, 'to', newStatus);
+
+      // Special handling for completion - show rating modal
+      if (newStatus === 'done') {
+        setTaskToComplete(taskData);
+        setShowCompletionModal(true);
+        return; // Don't proceed with normal update
+      }
 
       // Optimistically update the UI first for better UX
       setTasks(prevTasks =>
@@ -424,6 +442,66 @@ const Dashboard = () => {
       alert(`Failed to assign task: ${error.message}`);
     } finally {
       setAssigningTask(false);
+    }
+  };
+
+  // Handle task completion with automatic RL feedback calculation
+  const handleTaskCompletion = async (taskId) => {
+    try {
+      setSubmittingCompletion(true);
+
+      const token = await ensureValidSession();
+
+      const response = await fetch(`http://localhost:8000/api/tasks/${taskId}/complete`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`,
+        },
+        body: JSON.stringify({
+          confirm: true
+        }),
+      });
+
+      if (!response.ok) {
+        const errorData = await response.json();
+        throw new Error(errorData.detail || `Failed to complete task: ${response.status}`);
+      }
+
+      const result = await response.json();
+      console.log('Task completed with automatic RL feedback:', result);
+
+      // Close modal and refresh tasks
+      setShowCompletionModal(false);
+      setTaskToComplete(null);
+      await fetchTasks();
+
+      // Show performance summary
+      const metrics = result.data?.calculated_metrics;
+      if (metrics) {
+        const rewards = Object.entries(metrics.rewards).filter(([_, value]) => value).map(([key, _]) => key.replace('r_', '').replace('_', ' '));
+        const penalties = Object.entries(metrics.penalties).filter(([_, value]) => value).map(([key, _]) => key.replace('p_', ''));
+
+        let message = `Task completed successfully!\n\nPerformance Metrics:\n`;
+        message += `Completion Time: ${metrics.completion_time_days} days\n`;
+
+        if (rewards.length > 0) {
+          message += `Rewards Earned: ${rewards.join(', ')}\n`;
+        }
+        if (penalties.length > 0) {
+          message += `Penalties: ${penalties.join(', ')}\n`;
+        }
+
+        alert(message);
+      } else {
+        alert('Task completed successfully!');
+      }
+
+    } catch (error) {
+      console.error('Error completing task:', error);
+      alert(`Failed to complete task: ${error.message}`);
+    } finally {
+      setSubmittingCompletion(false);
     }
   };
 
@@ -1201,6 +1279,114 @@ const Dashboard = () => {
                           <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z" />
                         </svg>
                         <span>Assign Task</span>
+                      </span>
+                    )}
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Task Completion Modal */}
+      {showCompletionModal && taskToComplete && (
+        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+          <div className="bg-white w-full max-w-md max-h-[95vh] overflow-hidden rounded-2xl shadow-2xl">
+            {/* Header */}
+            <div className="bg-gradient-to-r from-green-600 to-blue-600 px-6 py-4">
+              <div className="flex justify-between items-center">
+                <div className="flex items-center space-x-3">
+                  <div className="w-10 h-10 bg-white/20 rounded-full flex items-center justify-center">
+                    <svg className="w-6 h-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
+                    </svg>
+                  </div>
+                  <div>
+                    <h2 className="text-xl font-bold text-white">Complete Task</h2>
+                    <p className="text-green-100 text-sm">Automatic performance evaluation</p>
+                  </div>
+                </div>
+                <button
+                  onClick={() => {
+                    setShowCompletionModal(false);
+                    setTaskToComplete(null);
+                  }}
+                  className="w-8 h-8 bg-white/20 hover:bg-white/30 rounded-full flex items-center justify-center text-white transition-colors"
+                >
+                  ✕
+                </button>
+              </div>
+            </div>
+
+            {/* Task Info */}
+            <div className="px-6 py-4 bg-gray-50 border-b border-gray-200">
+              <h3 className="font-medium text-gray-900 mb-1">{taskToComplete.title}</h3>
+              <p className="text-sm text-gray-600">How was the task completed?</p>
+            </div>
+
+            {/* Confirmation Form */}
+            <div className="p-6">
+              <div className="space-y-4">
+                {/* Performance Preview */}
+                <div className="bg-blue-50 border border-blue-200 rounded-lg p-4">
+                  <h4 className="text-sm font-medium text-blue-800 mb-2">Performance Evaluation</h4>
+                  <p className="text-sm text-blue-700">
+                    When you complete this task, the system will automatically evaluate performance based on:
+                  </p>
+                  <ul className="text-sm text-blue-700 mt-2 space-y-1">
+                    <li>• Completion time vs expected time for difficulty</li>
+                    <li>• On-time delivery (before due date)</li>
+                    <li>• Task difficulty and priority</li>
+                    <li>• Speed bonuses for quick completion</li>
+                  </ul>
+                  <p className="text-sm text-blue-700 mt-2 font-medium">
+                    RL feedback will be automatically recorded for learning.
+                  </p>
+                </div>
+
+                {/* Confirmation Question */}
+                <div className="text-center">
+                  <p className="text-gray-700 font-medium mb-4">
+                    Are you sure you want to mark this task as completed?
+                  </p>
+                  <p className="text-sm text-gray-500">
+                    This action will evaluate your performance and update the task status.
+                  </p>
+                </div>
+
+                {/* Action Buttons */}
+                <div className="flex justify-end space-x-4 pt-4 border-t border-gray-200">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setShowCompletionModal(false);
+                      setTaskToComplete(null);
+                    }}
+                    disabled={submittingCompletion}
+                    className="px-6 py-3 bg-gray-100 hover:bg-gray-200 text-gray-700 font-medium rounded-lg transition-colors duration-200 disabled:opacity-50"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      handleTaskCompletion(taskToComplete.id);
+                    }}
+                    disabled={submittingCompletion}
+                    className="px-6 py-3 bg-gradient-to-r from-green-600 to-blue-600 hover:from-green-700 hover:to-blue-700 text-white font-medium rounded-lg shadow-lg hover:shadow-xl transition-all duration-200 transform hover:-translate-y-0.5 disabled:opacity-50 disabled:cursor-not-allowed"
+                  >
+                    {submittingCompletion ? (
+                      <span className="flex items-center space-x-2">
+                        <div className="animate-spin rounded-full h-4 w-4 border-2 border-white border-t-transparent"></div>
+                        <span>Completing...</span>
+                      </span>
+                    ) : (
+                      <span className="flex items-center space-x-2">
+                        <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
+                        </svg>
+                        <span>Complete Task</span>
                       </span>
                     )}
                   </button>

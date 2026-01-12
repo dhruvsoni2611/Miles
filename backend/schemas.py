@@ -59,3 +59,8 @@ class EmployeeCreate(BaseModel):
 # Task Assignment Schema
 class TaskAssignment(BaseModel):
     employee_id: str = Field(..., description="UUID of the employee to assign the task to")
+
+
+# Task Completion Confirmation Schema (no rating needed - auto-calculated)
+class TaskCompletionConfirmation(BaseModel):
+    confirm: bool = Field(True, description="Confirmation to complete the task")
