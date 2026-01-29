@@ -61,12 +61,13 @@ class RewardCalculator:
             if completion_data.get('on_time', False):
                 reward += self.on_time_reward  # On time completion
 
-            if completion_data.get('user_rating', 0) > 0:
+            user_rating = completion_data.get('user_rating', 0) or 0
+            if user_rating > 0:
                 reward += self.rating_reward  # User rating provided
 
             # Hard task bonus (difficulty >= 8)
-            task_difficulty = task_data.get('difficulty_level', 1)
-            if task_difficulty >= self.hard_task_threshold:
+            task_difficulty = task_data.get('difficulty_level') or task_data.get('difficulty_score') or 1
+            if task_difficulty and task_difficulty >= self.hard_task_threshold:
                 reward += self.hard_task_bonus
 
             if completion_data.get('good_behavior', False):
@@ -79,20 +80,24 @@ class RewardCalculator:
         if completion_data.get('rework_required', False):
             reward -= self.rework_penalty  # Rework penalty
 
+        # TODO: Overdue penalty - commented out temporarily
         # Overdue penalty
-        overdue_days = completion_data.get('overdue_days', 0)
-        if overdue_days > 0:
-            reward -= self.overdue_penalty_per_day * overdue_days
+        # overdue_days = completion_data.get('overdue_days', 0) or 0
+        # if overdue_days > 0:
+        #     reward -= self.overdue_penalty_per_day * overdue_days
 
         # Apply reward clipping
         clipped_reward = np.clip(reward, self.min_reward, self.max_reward)
+
+        # Get overdue_days for logging (currently disabled, defaults to 0)
+        overdue_days_value = completion_data.get('overdue_days', 0) or 0
 
         logger.info(
             f"Task reward calculation: raw={reward:.3f}, clipped={clipped_reward:.3f}, "
             f"completed={completion_data.get('completed', False)}, "
             f"on_time={completion_data.get('on_time', False)}, "
             f"failed={completion_data.get('failed', False)}, "
-            f"overdue_days={overdue_days}"
+            f"overdue_days={overdue_days_value}"
         )
 
         return clipped_reward
@@ -133,11 +138,12 @@ class RewardCalculator:
             if completion_data.get('on_time', False):
                 components['on_time'] = self.on_time_reward
 
-            if completion_data.get('user_rating', 0) > 0:
+            user_rating = completion_data.get('user_rating', 0) or 0
+            if user_rating > 0:
                 components['rating'] = self.rating_reward
 
-            task_difficulty = task_data.get('difficulty_level', 1)
-            if task_difficulty >= self.hard_task_threshold:
+            task_difficulty = task_data.get('difficulty_level') or task_data.get('difficulty_score') or 1
+            if task_difficulty and task_difficulty >= self.hard_task_threshold:
                 components['hard_task'] = self.hard_task_bonus
 
             if completion_data.get('good_behavior', False):
@@ -150,8 +156,10 @@ class RewardCalculator:
         if completion_data.get('rework_required', False):
             components['rework'] = -self.rework_penalty
 
-        overdue_days = completion_data.get('overdue_days', 0)
-        components['overdue'] = -self.overdue_penalty_per_day * overdue_days
+        # TODO: Overdue penalty - commented out temporarily
+        # overdue_days = completion_data.get('overdue_days', 0) or 0
+        # components['overdue'] = -self.overdue_penalty_per_day * overdue_days
+        components['overdue'] = 0  # Set to 0 for now, will be implemented later
 
         # Totals
         components['total_raw'] = sum([

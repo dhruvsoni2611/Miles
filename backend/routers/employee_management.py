@@ -589,35 +589,7 @@ async def assign_task_to_employee(
                 detail="Failed to update task assignment"
             )
 
-        # 6. Get user_miles.id for both assigned employee and assigner
-        assigner_profile = supabase_client.table('user_miles').select('id').eq('auth_id', user_id).execute()
-        employee_profile = supabase_client.table('user_miles').select('id').eq('auth_id', assignment.employee_id).execute()
-
-        if not assigner_profile.data or not employee_profile.data:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Invalid assigner or employee ID"
-            )
-
-        assigned_employee_id = employee_profile.data[0]['id']
-        assigner_id = assigner_profile.data[0]['id']
-
-        # Create assignment record
-        assignment_record_data = {
-            'task_id': task_id,
-            'user_id': assigned_employee_id,
-            'assigned_by': assigner_id,
-            'assigned_at': datetime.now(timezone.utc).isoformat()
-        }
-
-        assignment_response = supabase_client.table('assignments').insert(
-            assignment_record_data
-        ).execute()
-
-        if not assignment_response.data:
-            print(f"⚠️ Warning: Failed to create assignment record for task {task_id}")
-
-        # 7. Update employee's workload score
+        # 6. Update employee's workload score
         try:
             workload_calculator = get_workload_score_calculator()
             success = workload_calculator.update_employee_workload_score(
@@ -631,14 +603,13 @@ async def assign_task_to_employee(
             print(f"⚠️ Error updating workload score for employee {assignment.employee_id}: {e}")
             # Don't fail the assignment if workload update fails
 
-        # 8. Success response
+        # 7. Success response
         return {
             "success": True,
             "message": "Task assigned successfully",
             "data": {
                 "task_id": task_id,
-                "assigned_to": assignment.employee_id,
-                "assignment_record": assignment_response.data[0] if assignment_response.data else None
+                "assigned_to": assignment.employee_id
             }
         }
 
@@ -685,6 +656,7 @@ async def complete_task_with_reward(
             )
 
         task = task_response.data[0]
+        print(f"📋 Task completion request for task {task_id}, current status: {task.get('status')}")
 
         # 2. Validate user can complete this task
         can_complete = False
@@ -692,9 +664,11 @@ async def complete_task_with_reward(
         # User created the task
         if task['created_by'] == user_id:
             can_complete = True
+            print(f"✅ User {user_id} can complete task (created by user)")
         # User is assigned to the task
         elif task.get('assigned_to') == user_id:
             can_complete = True
+            print(f"✅ User {user_id} can complete task (assigned to user)")
         else:
             # Check if user is a manager of the assigned employee or task creator
             if task.get('assigned_to'):
@@ -703,19 +677,31 @@ async def complete_task_with_reward(
                 ).eq('manager_id', user_id).eq('employee_id', task['assigned_to']).execute()
                 if manager_check.data:
                     can_complete = True
+                    print(f"✅ User {user_id} can complete task (manager of assigned employee)")
 
         if not can_complete:
+            print(f"❌ User {user_id} cannot complete task {task_id}")
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail="You can only complete tasks you created, are assigned to, or manage"
             )
 
-        # 3. Validate task is not already completed
-        if task['status'] == 'done':
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Task is already completed"
-            )
+        # 3. Check if task is already completed - if so, return success (idempotent operation)
+        task_status = task.get('status', '').lower() if task.get('status') else ''
+        if task_status == 'done':
+            print(f"ℹ️ Task {task_id} is already completed (status: {task_status}), returning success")
+            # Return success response for already-completed tasks (idempotent)
+            return {
+                "success": True,
+                "message": "Task is already completed",
+                "data": {
+                    "task_id": task_id,
+                    "status": "already_completed",
+                    "reward_calculated": None,
+                    "completion_status": None,
+                    "bandit_updated": False
+                }
+            }
 
         # 4. Get employee data for reward calculation
         employee_data = {}
@@ -761,24 +747,33 @@ async def complete_task_with_reward(
             else:
                 completion_dict['on_time'] = True  # No due date = on time
         
+        # TODO: Overdue date calculation - commented out temporarily
         # Auto-calculate overdue_days if not provided
-        if completion_dict.get('overdue_days', 0) == 0 and not completion_dict.get('on_time', True):
-            due_date_str = task.get('due_date')
-            if due_date_str:
-                try:
-                    if isinstance(due_date_str, str):
-                        if due_date_str.endswith('Z'):
-                            due_date = datetime.fromisoformat(due_date_str.replace('Z', '+00:00'))
-                        else:
-                            due_date = datetime.fromisoformat(due_date_str)
-                    else:
-                        due_date = due_date_str
-                    
-                    now = datetime.now(timezone.utc)
-                    if now > due_date:
-                        completion_dict['overdue_days'] = (now - due_date).days
-                except:
-                    completion_dict['overdue_days'] = 0
+        # Ensure overdue_days is set to 0 if None
+        # if completion_dict.get('overdue_days') is None:
+        #     completion_dict['overdue_days'] = 0
+        # 
+        # if completion_dict.get('overdue_days', 0) == 0 and not completion_dict.get('on_time', True):
+        #     due_date_str = task.get('due_date')
+        #     if due_date_str:
+        #         try:
+        #             if isinstance(due_date_str, str):
+        #                 if due_date_str.endswith('Z'):
+        #                     due_date = datetime.fromisoformat(due_date_str.replace('Z', '+00:00'))
+        #                 else:
+        #                     due_date = datetime.fromisoformat(due_date_str)
+        #             else:
+        #                 due_date = due_date_str
+        #             
+        #             now = datetime.now(timezone.utc)
+        #             if now > due_date:
+        #                 completion_dict['overdue_days'] = (now - due_date).days
+        #         except:
+        #             completion_dict['overdue_days'] = 0
+        
+        # Set overdue_days to 0 for now (will be implemented later)
+        if completion_dict.get('overdue_days') is None:
+            completion_dict['overdue_days'] = 0
         
         # Auto-calculate good_behavior if not provided (based on completion time vs difficulty)
         if not completion_dict.get('good_behavior', False):
@@ -795,13 +790,25 @@ async def complete_task_with_reward(
                     
                     now = datetime.now(timezone.utc)
                     completion_time_days = (now - created_at).days
-                    difficulty = task.get('difficulty_score', 1)
-                    expected_days = max(1, difficulty * 2)
+                    difficulty = task.get('difficulty_score') or task.get('difficulty_level') or 1
+                    if difficulty is None:
+                        difficulty = 1
+                    expected_days = max(1, int(difficulty) * 2)
                     
                     if completion_time_days <= expected_days:
                         completion_dict['good_behavior'] = True
                 except:
                     pass  # Keep default False
+        
+        # TODO: Overdue date validation - commented out temporarily
+        # Ensure all numeric fields are properly set (handle None values)
+        # if completion_dict.get('overdue_days') is None:
+        #     completion_dict['overdue_days'] = 0
+        # else:
+        #     completion_dict['overdue_days'] = int(completion_dict['overdue_days']) or 0
+        
+        # Set overdue_days to 0 for now
+        completion_dict['overdue_days'] = 0
         
         # Calculate reward
         reward = calculate_task_reward(task, employee_data, completion_dict)
@@ -828,22 +835,34 @@ async def complete_task_with_reward(
             )
 
         # 7. Store reward in RL feedback table
+        # Use completion_dict which has auto-calculated values, with safe defaults for None
+        # TODO: Overdue date logic - commented out temporarily
+        # overdue_days_value = completion_dict.get('overdue_days', 0) or 0
+        overdue_days_value = 0  # Set to 0 for now, will be implemented later
+        on_time_value = completion_dict.get('on_time', True)
+        if on_time_value is None:
+            on_time_value = True
+        
+        # Build RL feedback data with only essential fields
+        # Optional fields are excluded to avoid errors if columns don't exist
         rl_feedback_data = {
             'task_id': task_id,
             'employee_id': task.get('assigned_to'),
-            'r_completion': completion_data.completed,
-            'r_ontime': completion_data.on_time,
-            'r_good_behaviour': completion_data.good_behavior,
-            'p_overdue': completion_data.overdue_days > 0,
-            'p_rework': completion_data.rework_required,
-            'p_failure': completion_data.failed,
+            'r_completion': completion_dict.get('completed', True),
+            'r_ontime': on_time_value,
+            'r_good_behaviour': completion_dict.get('good_behavior', False),
+            'p_overdue': False,  # TODO: Set to False for now, will use overdue_days_value > 0 later
+            'p_rework': completion_dict.get('rework_required', False),
+            'p_failure': completion_dict.get('failed', False),
             'reward_value': reward,  # Clipped reward value
             'raw_reward': reward,    # Same as reward_value since we always clip
-            'user_rating': completion_data.user_rating,
-            'overdue_days': completion_data.overdue_days,
-            'completion_notes': completion_data.completion_notes,
+            'overdue_days': 0,  # TODO: Set to 0 for now, will use overdue_days_value later
             'created_at': datetime.now(timezone.utc).isoformat()
         }
+
+        # Add optional fields only if they have values (to avoid None issues)
+        if completion_dict.get('user_rating') is not None:
+            rl_feedback_data['user_rating'] = completion_dict.get('user_rating')
 
         # Add context features if available
         if task.get('assigned_to') and employee_data:
@@ -854,9 +873,35 @@ async def complete_task_with_reward(
             except Exception as e:
                 print(f"⚠️ Failed to extract context features: {e}")
 
-        rl_response = supabase_client.table('rl_miles').insert(rl_feedback_data).execute()
-        if not rl_response.data:
-            print(f"⚠️ Warning: Failed to store RL feedback for task {task_id}")
+        # Try to insert RL feedback - handle missing columns gracefully
+        try:
+            rl_response = supabase_client.table('rl_miles').insert(rl_feedback_data).execute()
+            if not rl_response.data:
+                print(f"⚠️ Warning: Failed to store RL feedback for task {task_id}")
+        except Exception as e:
+            # If insert fails due to missing columns, try without optional fields
+            print(f"⚠️ Warning: Failed to store RL feedback (missing columns?): {e}")
+            try:
+                # Retry with only essential fields
+                essential_fields = {
+                    'task_id': task_id,
+                    'employee_id': task.get('assigned_to'),
+                    'r_completion': completion_dict.get('completed', True),
+                    'r_ontime': on_time_value,
+                    'r_good_behaviour': completion_dict.get('good_behavior', False),
+                    'p_overdue': False,
+                    'p_rework': completion_dict.get('rework_required', False),
+                    'p_failure': completion_dict.get('failed', False),
+                    'reward_value': reward,
+                    'raw_reward': reward,
+                    'overdue_days': 0
+                }
+                rl_response = supabase_client.table('rl_miles').insert(essential_fields).execute()
+                if rl_response.data:
+                    print(f"✅ Stored RL feedback with essential fields only for task {task_id}")
+            except Exception as retry_error:
+                print(f"⚠️ Warning: Could not store RL feedback even with essential fields: {retry_error}")
+                # Don't fail the task completion if RL feedback storage fails
 
         # 8. Update bandit model if employee was assigned
         if task.get('assigned_to') and employee_data:
@@ -901,10 +946,14 @@ async def complete_task_with_reward(
     except HTTPException:
         raise
     except Exception as e:
-        print(f"Task completion error: {e}")
+        import traceback
+        error_details = str(e)
+        print(f"Task completion error: {error_details}")
+        print(f"Error type: {type(e).__name__}")
+        traceback.print_exc()
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Internal server error occurred while completing task"
+            detail=f"Internal server error occurred while completing task: {error_details}"
         )
 
 

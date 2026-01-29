@@ -749,14 +749,16 @@ async def update_task(task_id: str, task_data: TaskUpdate, current_user = Depend
                     r_ontime = True
                     r_hardtask_bonus = task_details.get('difficulty_score', 1) > 5
 
+                    # TODO: Overdue days calculation - commented out temporarily
                     # Calculate overdue days
-                    overdue_days = 0
-                    if task_details.get('due_date'):
-                        due_date = datetime.fromisoformat(task_details['due_date'].replace('Z', '+00:00'))
-                        now = datetime.now(timezone.utc)
-                        if now > due_date:
-                            r_ontime = False
-                            overdue_days = (now - due_date).days
+                    # overdue_days = 0
+                    # if task_details.get('due_date'):
+                    #     due_date = datetime.fromisoformat(task_details['due_date'].replace('Z', '+00:00'))
+                    #     now = datetime.now(timezone.utc)
+                    #     if now > due_date:
+                    #         r_ontime = False
+                    #         overdue_days = (now - due_date).days
+                    overdue_days = 0  # Set to 0 for now, will be implemented later
 
                     # Insert RL feedback
                     rl_data = {
@@ -765,7 +767,7 @@ async def update_task(task_id: str, task_data: TaskUpdate, current_user = Depend
                         'r_completion': r_completion,
                         'r_ontime': r_ontime,
                         'r_good_behaviour': False,  # Will be updated by completion rating
-                        'p_overdue': overdue_days > 0,
+                        'p_overdue': False,  # TODO: Set to False for now, will use overdue_days > 0 later
                         'p_rework': 0,
                         'p_failure': False,
                         'r_hardtask_bonus': r_hardtask_bonus
@@ -819,42 +821,6 @@ async def delete_task(task_id: str, current_user = Depends(get_current_user)):
         raise HTTPException(status_code=500, detail="Failed to delete task")
 
 # Test endpoints removed - use production endpoints instead
-
-# Create assignment record
-@app.post("/api/assignments")
-async def create_assignment(assignment: dict, current_user = Depends(get_current_user)):
-    """Create an assignment record"""
-    try:
-        from routers.employee_management import get_supabase_admin
-        supabase_client = get_supabase_admin()
-
-        # Validate required fields
-        required_fields = ['task_id', 'user_id', 'assigned_by']
-        for field in required_fields:
-            if field not in assignment:
-                raise HTTPException(status_code=400, detail=f"Missing required field: {field}")
-
-        assignment_data = {
-            'task_id': assignment['task_id'],
-            'user_id': assignment['user_id'],
-            'assigned_by': assignment['assigned_by'],
-            'assigned_at': assignment.get('assigned_at', datetime.utcnow().isoformat())
-        }
-
-        print(f"Creating assignment record: {assignment_data}")
-        response = supabase_client.table("assignments").insert(assignment_data).execute()
-
-        if not response.data:
-            raise HTTPException(status_code=500, detail="Failed to create assignment record")
-
-        print(f"Assignment created successfully: {response.data[0]}")
-        return {"success": True, "data": response.data[0]}
-
-    except Exception as e:
-        print(f"Assignment creation error: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
-
-# Test endpoint removed - use production endpoints instead
 
 # Employees API
 @app.get("/api/employees/managed")
