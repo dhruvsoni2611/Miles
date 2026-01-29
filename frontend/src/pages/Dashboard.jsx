@@ -74,6 +74,7 @@ const Dashboard = () => {
     assigned_to: '' // Employee assignment
   });
   const [taskCreating, setTaskCreating] = useState(false);
+  const [createTaskAssignmentMode, setCreateTaskAssignmentMode] = useState('auto'); // 'auto' or 'manual' - default to 'auto'
 
   // Assignable employees state
   const [assignableEmployees, setAssignableEmployees] = useState([]);
@@ -83,6 +84,7 @@ const Dashboard = () => {
   const [showAssignModal, setShowAssignModal] = useState(false);
   const [taskToAssign, setTaskToAssign] = useState(null);
   const [assigningTask, setAssigningTask] = useState(false);
+  const [assignmentMode, setAssignmentMode] = useState('auto'); // 'auto' or 'manual' - default to 'auto'
 
   // Task completion modal state
   const [showCompletionModal, setShowCompletionModal] = useState(false);
@@ -338,6 +340,8 @@ const Dashboard = () => {
       const token = await ensureValidSession();
 
       // Prepare task data for API
+      // For auto assignment, don't include assigned_to (will be assigned after creation)
+      // For manual assignment, include assigned_to if selected
       const taskData = {
         title: newTask.title.trim(),
         description: newTask.description.trim(),
@@ -346,11 +350,18 @@ const Dashboard = () => {
         status: newTask.status,
         due_date: newTask.due_date ? newTask.due_date.toISOString() : null,
         required_skills: [], // Can be extended later
-        assigned_to: newTask.assigned_to || null, // Include assignment if selected
+        assigned_to: createTaskAssignmentMode === 'manual' ? (newTask.assigned_to || null) : null,
         rating_score: 0,
         justified: false,
         bonus: false
       };
+
+      // Validate manual assignment
+      if (createTaskAssignmentMode === 'manual' && !newTask.assigned_to) {
+        alert('Please select an employee for manual assignment');
+        setTaskCreating(false);
+        return;
+      }
 
       const response = await fetch('http://localhost:8000/api/tasks', {
         method: 'POST',
@@ -369,6 +380,33 @@ const Dashboard = () => {
       const createdTaskResponse = await response.json();
       console.log('Task created successfully:', createdTaskResponse);
 
+      const taskId = createdTaskResponse.data?.task?.id;
+
+      // If auto assignment mode, assign task using RL agent
+      if (createTaskAssignmentMode === 'auto' && taskId) {
+        try {
+          const assignResponse = await fetch(`http://localhost:8000/api/tasks/${taskId}/assign?use_bandit=true`, {
+            method: 'PUT',
+            headers: {
+              'Content-Type': 'application/json',
+              'Authorization': `Bearer ${token}`,
+            },
+            body: JSON.stringify({}), // Empty body for auto assignment
+          });
+
+          if (!assignResponse.ok) {
+            const errorData = await assignResponse.json();
+            console.warn('Auto assignment failed:', errorData);
+            // Don't fail task creation if assignment fails
+          } else {
+            console.log('Task auto-assigned successfully');
+          }
+        } catch (assignError) {
+          console.warn('Auto assignment error:', assignError);
+          // Don't fail task creation if assignment fails
+        }
+      }
+
       // Reset form and close modal
       setNewTask({
         title: '',
@@ -381,12 +419,15 @@ const Dashboard = () => {
         project_id: '',
         assigned_to: ''
       });
+      setCreateTaskAssignmentMode('auto'); // Reset to default
       setShowTaskModal(false);
 
       // Refresh tasks list
       await fetchTasks();
 
-      const assignmentMessage = newTask.assigned_to
+      const assignmentMessage = createTaskAssignmentMode === 'auto'
+        ? 'Task created and auto-assigned using AI!'
+        : newTask.assigned_to
         ? 'Task created and assigned successfully!'
         : 'Task created successfully!';
       alert(assignmentMessage);
@@ -400,8 +441,9 @@ const Dashboard = () => {
   };
 
   // Handle task assignment
-  const handleAssignTask = async (taskId, employeeId) => {
-    if (!employeeId) {
+  const handleAssignTask = async (taskId, employeeId = null) => {
+    // For manual mode, employeeId is required
+    if (assignmentMode === 'manual' && !employeeId) {
       alert('Please select an employee');
       return;
     }
@@ -411,15 +453,23 @@ const Dashboard = () => {
 
       const token = await ensureValidSession();
 
-      const response = await fetch(`http://localhost:8000/api/tasks/${taskId}/assign`, {
+      // Build request URL with use_bandit parameter
+      const useBandit = assignmentMode === 'auto';
+      const url = `http://localhost:8000/api/tasks/${taskId}/assign${useBandit ? '?use_bandit=true' : ''}`;
+
+      // Build request body
+      const requestBody = {};
+      if (employeeId) {
+        requestBody.employee_id = employeeId;
+      }
+
+      const response = await fetch(url, {
         method: 'PUT',
         headers: {
           'Content-Type': 'application/json',
           'Authorization': `Bearer ${token}`,
         },
-        body: JSON.stringify({
-          employee_id: employeeId
-        }),
+        body: JSON.stringify(requestBody),
       });
 
       if (!response.ok) {
@@ -433,9 +483,13 @@ const Dashboard = () => {
       // Close modal and refresh tasks
       setShowAssignModal(false);
       setTaskToAssign(null);
+      setAssignmentMode('auto'); // Reset to default
       await fetchTasks();
 
-      alert('Task assigned successfully!');
+      const assignmentMessage = assignmentMode === 'auto'
+        ? 'Task assigned automatically using AI recommendation!'
+        : 'Task assigned successfully!';
+      alert(assignmentMessage);
 
     } catch (error) {
       console.error('Error assigning task:', error);
@@ -981,7 +1035,10 @@ const Dashboard = () => {
                   </div>
                 </div>
                 <button
-                  onClick={() => setShowTaskModal(false)}
+                  onClick={() => {
+                    setShowTaskModal(false);
+                    setCreateTaskAssignmentMode('auto'); // Reset to default
+                  }}
                   className="w-8 h-8 bg-white/20 hover:bg-white/30 rounded-full flex items-center justify-center text-white transition-colors"
                 >
                   ✕
@@ -1101,45 +1158,113 @@ const Dashboard = () => {
                   </div>
                 </div>
 
-                {/* Assign to Employee */}
+                {/* Assignment Mode Selection */}
                 <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-2">
-                    Assign to Employee
+                  <label className="block text-sm font-medium text-gray-700 mb-3">
+                    Assignment Mode
                   </label>
-                  <div className="relative">
-                    <select
-                      value={newTask.assigned_to}
-                      onChange={(e) => setNewTask(prev => ({ ...prev, assigned_to: e.target.value }))}
-                      className="w-full px-4 py-3 pl-10 bg-white border border-black rounded-lg focus:ring-2 focus:ring-purple-500 focus:border-purple-500 text-black transition-colors"
-                      disabled={employeesLoading}
-                    >
-                      <option value="">
-                        {employeesLoading ? 'Loading employees...' : 'Select employee (optional)'}
-                      </option>
-                      {assignableEmployees.map((employee) => (
-                        <option key={employee.auth_id} value={employee.auth_id}>
-                          {employee.name} ({employee.email})
+                  <div className="flex space-x-4">
+                    <label className="flex items-center space-x-2 cursor-pointer">
+                      <input
+                        type="radio"
+                        name="createTaskAssignmentMode"
+                        value="auto"
+                        checked={createTaskAssignmentMode === 'auto'}
+                        onChange={(e) => setCreateTaskAssignmentMode(e.target.value)}
+                        disabled={taskCreating}
+                        className="w-4 h-4 text-purple-600 focus:ring-purple-500"
+                      />
+                      <span className="text-sm font-medium text-gray-700">
+                        🤖 Auto Assignment
+                      </span>
+                    </label>
+                    <label className="flex items-center space-x-2 cursor-pointer">
+                      <input
+                        type="radio"
+                        name="createTaskAssignmentMode"
+                        value="manual"
+                        checked={createTaskAssignmentMode === 'manual'}
+                        onChange={(e) => setCreateTaskAssignmentMode(e.target.value)}
+                        disabled={taskCreating}
+                        className="w-4 h-4 text-purple-600 focus:ring-purple-500"
+                      />
+                      <span className="text-sm font-medium text-gray-700">
+                        👤 Manual Selection
+                      </span>
+                    </label>
+                  </div>
+                  <p className="text-xs text-gray-500 mt-2">
+                    {createTaskAssignmentMode === 'auto' 
+                      ? 'AI will automatically select the best employee based on skills and performance'
+                      : 'You will manually select an employee from the list'}
+                  </p>
+                </div>
+
+                {/* Employee Selection (only shown for manual mode) */}
+                {createTaskAssignmentMode === 'manual' && (
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-2">
+                      Select Employee <span className="text-red-500">*</span>
+                    </label>
+                    <div className="relative">
+                      <select
+                        value={newTask.assigned_to}
+                        onChange={(e) => setNewTask(prev => ({ ...prev, assigned_to: e.target.value }))}
+                        className="w-full px-4 py-3 pl-10 bg-white border border-black rounded-lg focus:ring-2 focus:ring-purple-500 focus:border-purple-500 text-black transition-colors"
+                        disabled={employeesLoading || taskCreating}
+                      >
+                        <option value="">
+                          {employeesLoading ? 'Loading employees...' : 'Choose an employee'}
                         </option>
-                      ))}
-                    </select>
-                    <div className="absolute left-3 top-3 pointer-events-none">
-                      <svg className="w-5 h-5 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z" />
+                        {assignableEmployees.map((employee) => (
+                          <option key={employee.auth_id} value={employee.auth_id}>
+                            {employee.name} ({employee.email})
+                          </option>
+                        ))}
+                      </select>
+                      <div className="absolute left-3 top-3 pointer-events-none">
+                        <svg className="w-5 h-5 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z" />
+                        </svg>
+                      </div>
+                    </div>
+                    {assignableEmployees.length > 0 && (
+                      <p className="text-xs text-gray-500 mt-1">
+                        {assignableEmployees.length} employees available for assignment
+                      </p>
+                    )}
+                  </div>
+                )}
+
+                {/* Auto Assignment Info */}
+                {createTaskAssignmentMode === 'auto' && (
+                  <div className="bg-purple-50 border border-purple-200 rounded-lg p-4">
+                    <div className="flex items-start space-x-3">
+                      <svg className="w-5 h-5 text-purple-600 mt-0.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
                       </svg>
+                      <div>
+                        <p className="text-sm font-medium text-purple-900 mb-1">
+                          AI-Powered Assignment
+                        </p>
+                        <p className="text-xs text-purple-700">
+                          The system will automatically select the best employee using:
+                          <br />• Skill similarity matching (OpenAI embeddings)
+                          <br />• Contextual bandit algorithm (performance-based learning)
+                        </p>
+                      </div>
                     </div>
                   </div>
-                  {assignableEmployees.length > 0 && (
-                    <p className="text-xs text-gray-500 mt-1">
-                      {assignableEmployees.length} employees available for assignment
-                    </p>
-                  )}
-                </div>
+                )}
 
                 {/* Action Buttons */}
                 <div className="flex justify-end space-x-4 pt-6 border-t border-gray-200">
                   <button
                     type="button"
-                    onClick={() => setShowTaskModal(false)}
+                    onClick={() => {
+                      setShowTaskModal(false);
+                      setCreateTaskAssignmentMode('auto'); // Reset to default
+                    }}
                     className="px-6 py-3 bg-gray-100 hover:bg-gray-200 text-gray-700 font-medium rounded-lg transition-colors duration-200"
                   >
                     Cancel
@@ -1192,6 +1317,7 @@ const Dashboard = () => {
                   onClick={() => {
                     setShowAssignModal(false);
                     setTaskToAssign(null);
+                    setAssignmentMode('auto'); // Reset to default
                   }}
                   className="w-8 h-8 bg-white/20 hover:bg-white/30 rounded-full flex items-center justify-center text-white transition-colors"
                 >
@@ -1215,31 +1341,97 @@ const Dashboard = () => {
             {/* Form Content */}
             <div className="p-6">
               <div className="space-y-4">
+                {/* Assignment Mode Selection */}
                 <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-2">
-                    Select Employee <span className="text-red-500">*</span>
+                  <label className="block text-sm font-medium text-gray-700 mb-3">
+                    Assignment Mode
                   </label>
-                  <select
-                    id="employeeSelect"
-                    className="w-full px-4 py-3 bg-white border border-black rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 text-black transition-colors"
-                    disabled={employeesLoading || assigningTask}
-                    defaultValue=""
-                  >
-                    <option value="" disabled>
-                      {employeesLoading ? 'Loading employees...' : 'Choose an employee'}
-                    </option>
-                    {assignableEmployees.map((employee) => (
-                      <option key={employee.auth_id} value={employee.auth_id}>
-                        {employee.name} ({employee.email})
-                      </option>
-                    ))}
-                  </select>
-                  {assignableEmployees.length > 0 && (
-                    <p className="text-xs text-gray-500 mt-1">
-                      {assignableEmployees.length} employees available for assignment
-                    </p>
-                  )}
+                  <div className="flex space-x-4">
+                    <label className="flex items-center space-x-2 cursor-pointer">
+                      <input
+                        type="radio"
+                        name="assignmentMode"
+                        value="auto"
+                        checked={assignmentMode === 'auto'}
+                        onChange={(e) => setAssignmentMode(e.target.value)}
+                        disabled={assigningTask}
+                        className="w-4 h-4 text-blue-600 focus:ring-blue-500"
+                      />
+                      <span className="text-sm font-medium text-gray-700">
+                        🤖 Auto Assignment
+                      </span>
+                    </label>
+                    <label className="flex items-center space-x-2 cursor-pointer">
+                      <input
+                        type="radio"
+                        name="assignmentMode"
+                        value="manual"
+                        checked={assignmentMode === 'manual'}
+                        onChange={(e) => setAssignmentMode(e.target.value)}
+                        disabled={assigningTask}
+                        className="w-4 h-4 text-blue-600 focus:ring-blue-500"
+                      />
+                      <span className="text-sm font-medium text-gray-700">
+                        👤 Manual Selection
+                      </span>
+                    </label>
+                  </div>
+                  <p className="text-xs text-gray-500 mt-2">
+                    {assignmentMode === 'auto' 
+                      ? 'AI will automatically select the best employee based on skills and performance'
+                      : 'You will manually select an employee from the list'}
+                  </p>
                 </div>
+
+                {/* Employee Selection (only shown for manual mode) */}
+                {assignmentMode === 'manual' && (
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-2">
+                      Select Employee <span className="text-red-500">*</span>
+                    </label>
+                    <select
+                      id="employeeSelect"
+                      className="w-full px-4 py-3 bg-white border border-black rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 text-black transition-colors"
+                      disabled={employeesLoading || assigningTask}
+                      defaultValue=""
+                    >
+                      <option value="" disabled>
+                        {employeesLoading ? 'Loading employees...' : 'Choose an employee'}
+                      </option>
+                      {assignableEmployees.map((employee) => (
+                        <option key={employee.auth_id} value={employee.auth_id}>
+                          {employee.name} ({employee.email})
+                        </option>
+                      ))}
+                    </select>
+                    {assignableEmployees.length > 0 && (
+                      <p className="text-xs text-gray-500 mt-1">
+                        {assignableEmployees.length} employees available for assignment
+                      </p>
+                    )}
+                  </div>
+                )}
+
+                {/* Auto Assignment Info */}
+                {assignmentMode === 'auto' && (
+                  <div className="bg-blue-50 border border-blue-200 rounded-lg p-4">
+                    <div className="flex items-start space-x-3">
+                      <svg className="w-5 h-5 text-blue-600 mt-0.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                      </svg>
+                      <div>
+                        <p className="text-sm font-medium text-blue-900 mb-1">
+                          AI-Powered Assignment
+                        </p>
+                        <p className="text-xs text-blue-700">
+                          The system will automatically select the best employee using:
+                          <br />• Skill similarity matching (OpenAI embeddings)
+                          <br />• Contextual bandit algorithm (performance-based learning)
+                        </p>
+                      </div>
+                    </div>
+                  </div>
+                )}
 
                 {/* Action Buttons */}
                 <div className="flex justify-end space-x-4 pt-4 border-t border-gray-200">
@@ -1248,6 +1440,7 @@ const Dashboard = () => {
                     onClick={() => {
                       setShowAssignModal(false);
                       setTaskToAssign(null);
+                      setAssignmentMode('auto'); // Reset to default
                     }}
                     disabled={assigningTask}
                     className="px-6 py-3 bg-gray-100 hover:bg-gray-200 text-gray-700 font-medium rounded-lg transition-colors duration-200 disabled:opacity-50"
@@ -1257,15 +1450,20 @@ const Dashboard = () => {
                   <button
                     type="button"
                     onClick={() => {
-                      const selectElement = document.getElementById('employeeSelect');
-                      const employeeId = selectElement.value;
-                      if (employeeId) {
-                        handleAssignTask(taskToAssign.id, employeeId);
+                      if (assignmentMode === 'manual') {
+                        const selectElement = document.getElementById('employeeSelect');
+                        const employeeId = selectElement.value;
+                        if (employeeId) {
+                          handleAssignTask(taskToAssign.id, employeeId);
+                        } else {
+                          alert('Please select an employee');
+                        }
                       } else {
-                        alert('Please select an employee');
+                        // Auto mode - no employee selection needed
+                        handleAssignTask(taskToAssign.id);
                       }
                     }}
-                    disabled={assigningTask || employeesLoading}
+                    disabled={assigningTask || (assignmentMode === 'manual' && employeesLoading)}
                     className="px-6 py-3 bg-gradient-to-r from-blue-600 to-purple-600 hover:from-blue-700 hover:to-purple-700 text-white font-medium rounded-lg shadow-lg hover:shadow-xl transition-all duration-200 transform hover:-translate-y-0.5 disabled:opacity-50 disabled:cursor-not-allowed"
                   >
                     {assigningTask ? (

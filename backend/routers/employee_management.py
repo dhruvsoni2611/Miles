@@ -1,17 +1,14 @@
 from fastapi import APIRouter, HTTPException, status, Depends
 from pydantic import BaseModel, Field, validator
-from typing import Optional, List
+from typing import Optional, List, Dict
 from datetime import datetime, timezone
 from supabase import create_client, Client
 import os
 
 # Import the schema and supabase
 try:
-    from schemas import UserTaskCreate, EmployeeCreate, TaskAssignment
+    from schemas import UserTaskCreate, EmployeeCreate, TaskAssignment, TaskCompletionData
     from main import get_current_user
-    from agents.embeddings import create_skill_embeddings
-    from agents.score_calculation import calculate_employee_productivity_score
-    from agents.workload_score import get_workload_score_calculator
 except ImportError:
     # Fallback for direct execution
     import sys
@@ -19,11 +16,39 @@ except ImportError:
     backend_dir = os.path.dirname(os.path.dirname(__file__))
     if backend_dir not in sys.path:
         sys.path.insert(0, backend_dir)
-    from schemas import UserTaskCreate, EmployeeCreate, TaskAssignment
+    from schemas import UserTaskCreate, EmployeeCreate, TaskAssignment, TaskCompletionData
     from main import get_current_user
+
+# Conditional imports for ML agents (may not be available if sklearn is not installed)
+try:
     from agents.embeddings import create_skill_embeddings
     from agents.score_calculation import calculate_employee_productivity_score
     from agents.workload_score import get_workload_score_calculator
+    from agents.contextual_bandit import get_contextual_bandit_agent
+    from agents.reward_calculation import calculate_task_reward
+    from agents.skill_similarity_filter import filter_employees_by_skill_similarity
+    ML_AGENTS_AVAILABLE = True
+except ImportError as e:
+    # ML agents not available - routes that don't require them will still work
+    import warnings
+    warnings.warn(f"ML agents not available: {e}. Employee creation will work, but task assignment with RL will not.")
+    ML_AGENTS_AVAILABLE = False
+    # Create stub functions to prevent NameError
+    def create_skill_embeddings(*args, **kwargs):
+        return []
+    def calculate_employee_productivity_score(*args, **kwargs):
+        return 0.5
+    def get_workload_score_calculator():
+        class StubWorkloadCalculator:
+            def update_employee_workload_score(self, *args, **kwargs):
+                return False
+        return StubWorkloadCalculator()
+    def get_contextual_bandit_agent():
+        raise ImportError("scikit-learn is required for contextual bandit")
+    def calculate_task_reward(*args, **kwargs):
+        raise ImportError("scikit-learn is required for reward calculation")
+    def filter_employees_by_skill_similarity(*args, **kwargs):
+        raise ImportError("scikit-learn is required for skill similarity")
 
 # Supabase admin client - created lazily to avoid import issues
 _supabase_admin = None
@@ -59,6 +84,69 @@ def get_supabase_admin():
     return _supabase_admin
 
 router = APIRouter()
+
+async def get_assignable_employees_data(user_id: str, supabase_client) -> List[Dict]:
+    """
+    Get assignable employees with full data needed for bandit algorithm.
+    """
+    try:
+        # Get employees managed by current user
+        reporting_response = supabase_client.table('user_reporting').select(
+            'employee_id'
+        ).eq('manager_id', user_id).execute()
+
+        if not reporting_response.data:
+            return []
+
+        employee_ids = [r['employee_id'] for r in reporting_response.data]
+
+        # Get employee details with all needed fields
+        employees_response = supabase_client.table('user_miles').select(
+            'auth_id, name, email, productivity_score, workload, skill_vector, experience_years'
+        ).in_('auth_id', employee_ids).execute()
+
+        employees = employees_response.data or []
+
+        # Parse JSON fields
+        for employee in employees:
+            try:
+                # Preserve skill_vector (embeddings) for similarity filtering
+                if employee.get('skill_vector'):
+                    # skill_vector is stored as JSONB array of embeddings
+                    if isinstance(employee['skill_vector'], list):
+                        # Keep skill_vector as is (embeddings)
+                        # Also extract skill names if available (for fallback)
+                        employee['skill_vector'] = employee['skill_vector']
+                        # If we need skill names, they would be in a separate field
+                        # For now, skill_vector contains embeddings
+                    else:
+                        employee['skill_vector'] = []
+                else:
+                    employee['skill_vector'] = []
+
+                # Also set skills for compatibility (empty if no names available)
+                employee['skills'] = employee.get('skills', [])
+
+                if employee.get('experience_years'):
+                    # experience_years is stored as JSONB object
+                    if isinstance(employee['experience_years'], dict):
+                        employee['experience_years'] = employee['experience_years']
+                    else:
+                        employee['experience_years'] = {}
+                else:
+                    employee['experience_years'] = {}
+
+            except Exception as e:
+                print(f"⚠️ Error parsing employee data for {employee['auth_id']}: {e}")
+                employee['skill_vector'] = []
+                employee['skills'] = []
+                employee['experience_years'] = {}
+
+        return employees
+
+    except Exception as e:
+        print(f"⚠️ Error getting assignable employees data: {e}")
+        return []
 
 @router.post("/tasks", status_code=status.HTTP_201_CREATED)
 async def create_task(
@@ -136,21 +224,39 @@ async def create_task(
                 skill_vector_data = []
 
         # 4. DATA PREPARATION
+        # Handle both priority formats (priority string or priority_score int)
+        priority_score = None
+        if task.priority_score is not None:
+            priority_score = task.priority_score
+        elif task.priority is not None:
+            priority_score = task.get_priority_int()
+        else:
+            priority_score = 2  # Default medium priority
+        
+        # Handle both difficulty formats (difficulty_level or difficulty_score)
+        difficulty_score = None
+        if task.difficulty_score is not None:
+            difficulty_score = task.difficulty_score
+        elif task.difficulty_level is not None:
+            difficulty_score = task.difficulty_level
+        else:
+            difficulty_score = 1  # Default difficulty
+        
         task_data = {
             "created_by": user_id,  # Use created_by field in database
             "title": task.title,
             "description": task.description,
             "project_id": task.project_id,  # UUID string for project reference
-            "priority_score": task.get_priority_int(),  # Convert string to integer (1-5)
-            "difficulty_score": task.difficulty_level,  # 1-10 scale
+            "priority_score": priority_score,  # Integer (1-5)
+            "difficulty_score": difficulty_score,  # Integer (1-10)
             "required_skills": skill_names,  # JSONB array of skill names
             "skill_embedding": skill_vector_data,  # JSONB array of skill embeddings
             "status": task.status,  # Must be: todo, in_progress, review, done
             "assigned_to": task.assigned_to,  # UUID string for assigned user
             "due_date": task.due_date.isoformat() if task.due_date else None,  # Changed from deadline
-            "rating_score": 0,  # Default rating score
-            "justified": False,  # Default justified value
-            "bonus": False  # Default bonus value
+            "rating_score": task.rating_score if task.rating_score is not None else 0,  # Rating score
+            "justified": task.justified if task.justified is not None else False,  # Justified flag
+            "bonus": task.bonus if task.bonus is not None else False  # Bonus flag
         }
 
         # 5. DATABASE INSERTION
@@ -271,6 +377,7 @@ async def create_task(
 async def assign_task_to_employee(
     task_id: str,
     assignment: TaskAssignment,
+    use_bandit: bool = False,  # Query parameter to enable bandit recommendation
     current_user: dict = Depends(get_current_user)
 ):
     """
@@ -301,6 +408,111 @@ async def assign_task_to_employee(
 
         task = task_response.data[0]
 
+        # Get full task data for bandit (including required skills)
+        full_task_response = supabase_client.table('tasks').select(
+            'id, title, description, project_id, priority_score, difficulty_score, '
+            'required_skills, skill_embedding, status, assigned_to, due_date, '
+            'rating_score, justified, bonus, created_by'
+        ).eq('id', task_id).execute()
+
+        if full_task_response.data:
+            full_task_data = full_task_response.data[0]
+        else:
+            full_task_data = task
+
+        # BANDIT INTEGRATION: Get recommended employee if bandit mode is enabled
+        # If use_bandit=True and no employee_id provided, auto-assign using RL agent
+        # If use_bandit=True and employee_id provided, validate but still use bandit recommendation
+        # If use_bandit=False, require employee_id (manual assignment)
+        
+        if use_bandit and not assignment.employee_id:
+            # AUTO ASSIGNMENT: Use RL agent to select employee
+            try:
+                bandit_agent = get_contextual_bandit_agent()
+
+                # Get available employees with their data
+                available_employees = await get_assignable_employees_data(user_id, supabase_client)
+
+                if not available_employees:
+                    raise HTTPException(
+                        status_code=status.HTTP_400_BAD_REQUEST,
+                        detail="No employees available for automatic assignment"
+                    )
+
+                # STAGE 1: SKILL SIMILARITY FILTER
+                # Filter to top 3 employees based on skill similarity using OpenAI embeddings
+                print(f"🔍 Filtering {len(available_employees)} employees by skill similarity...")
+                top_employees = filter_employees_by_skill_similarity(
+                    full_task_data,
+                    available_employees,
+                    top_k=3
+                )
+
+                if not top_employees:
+                    print("⚠️ No employees passed skill similarity filter, using all employees")
+                    top_employees = available_employees
+                else:
+                    print(f"✅ Filtered to top {len(top_employees)} employees by skill similarity")
+
+                # STAGE 2: RL AGENT SELECTION
+                # Extract employee data for bandit (only top 3 from skill filter)
+                employee_data_list = []
+                for emp in top_employees:
+                    emp_data = {
+                        'auth_id': emp['auth_id'],
+                        'productivity_score': emp.get('productivity_score', 0),
+                        'workload': emp.get('workload', 0),
+                        'skills': emp.get('skill_vector', []),
+                        'experience_years': emp.get('experience_years', {})
+                    }
+                    employee_data_list.append(emp_data)
+
+                # Get context features for the task
+                # Use first employee for context calculation (features are task-centric)
+                if employee_data_list:
+                    context_features = bandit_agent.get_context_features(
+                        full_task_data, employee_data_list[0]
+                    )
+
+                    # Get available employee IDs (only top 3 from skill filter)
+                    available_employee_ids = [emp['auth_id'] for emp in employee_data_list]
+
+                    # Select best employee using bandit (from top 3 skill-matched employees)
+                    bandit_recommended_employee = bandit_agent.select_action(
+                        context_features, available_employee_ids, full_task_data
+                    )
+
+                    print(f"🎯 Bandit selected employee from top {len(top_employees)} skill-matched candidates: {bandit_recommended_employee}")
+
+                    # Set assignment to bandit recommendation
+                    if bandit_recommended_employee:
+                        assignment.employee_id = bandit_recommended_employee
+                    else:
+                        raise HTTPException(
+                            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                            detail="Failed to select employee using AI agent"
+                        )
+
+            except HTTPException:
+                raise
+            except Exception as e:
+                print(f"⚠️ Bandit recommendation failed: {e}")
+                raise HTTPException(
+                    status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                    detail=f"Automatic assignment failed: {str(e)}"
+                )
+        elif use_bandit and assignment.employee_id:
+            # Bandit mode enabled but employee_id provided - validate and use provided employee
+            # (This allows manual override even when bandit is enabled)
+            print(f"ℹ️ Bandit mode enabled but employee_id provided, using provided employee: {assignment.employee_id}")
+        elif not use_bandit:
+            # MANUAL ASSIGNMENT: Require employee_id
+            if not assignment.employee_id:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="employee_id is required for manual assignment"
+                )
+
         # 2. Validate task is not completed
         if task['status'] == 'done':
             raise HTTPException(
@@ -329,14 +541,21 @@ async def assign_task_to_employee(
                 detail="You can only assign tasks you created or manage"
             )
 
-        # 3. Validate task is not already assigned to someone else
+        # 3. Validate employee_id is set (should be set by now)
+        if not assignment.employee_id:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="No employee selected for assignment"
+            )
+
+        # 4. Validate task is not already assigned to someone else
         if task.get('assigned_to') and task['assigned_to'] != assignment.employee_id:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="Task is already assigned to another employee"
             )
 
-        # 4. Validate employee is managed by current user
+        # 5. Validate employee is managed by current user
         reporting_check = supabase_client.table('user_reporting').select(
             'employee_id'
         ).eq('manager_id', user_id).eq('employee_id', assignment.employee_id).execute()
@@ -430,6 +649,262 @@ async def assign_task_to_employee(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Internal server error occurred while assigning task"
+        )
+
+
+@router.post("/tasks/{task_id}/complete")
+async def complete_task_with_reward(
+    task_id: str,
+    completion_data: TaskCompletionData,
+    current_user: dict = Depends(get_current_user)
+):
+    """
+    Complete a task and calculate reward for reinforcement learning.
+
+    This endpoint:
+    1. Validates task ownership and completion permissions
+    2. Updates task status to 'done'
+    3. Calculates reward based on completion outcomes
+    4. Stores reward in RL feedback table
+    5. Updates bandit model with new reward signal
+    """
+    try:
+        user_id = current_user.id
+        supabase_client = get_supabase_admin()
+
+        # 1. Validate task exists and get task details
+        task_response = supabase_client.table('tasks').select(
+            'id, title, assigned_to, created_by, status, priority_score, difficulty_score, '
+            'required_skills, due_date, created_at'
+        ).eq('id', task_id).execute()
+
+        if not task_response.data:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Task not found"
+            )
+
+        task = task_response.data[0]
+
+        # 2. Validate user can complete this task
+        can_complete = False
+
+        # User created the task
+        if task['created_by'] == user_id:
+            can_complete = True
+        # User is assigned to the task
+        elif task.get('assigned_to') == user_id:
+            can_complete = True
+        else:
+            # Check if user is a manager of the assigned employee or task creator
+            if task.get('assigned_to'):
+                manager_check = supabase_client.table('user_reporting').select(
+                    'manager_id'
+                ).eq('manager_id', user_id).eq('employee_id', task['assigned_to']).execute()
+                if manager_check.data:
+                    can_complete = True
+
+        if not can_complete:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="You can only complete tasks you created, are assigned to, or manage"
+            )
+
+        # 3. Validate task is not already completed
+        if task['status'] == 'done':
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Task is already completed"
+            )
+
+        # 4. Get employee data for reward calculation
+        employee_data = {}
+        if task.get('assigned_to'):
+            employee_response = supabase_client.table('user_miles').select(
+                'auth_id, name, productivity_score, workload, skill_vector, experience_years'
+            ).eq('auth_id', task['assigned_to']).execute()
+
+            if employee_response.data:
+                employee_data = employee_response.data[0]
+                # Parse JSON fields
+                try:
+                    employee_data['skills'] = employee_data.get('skill_vector', [])
+                    employee_data['experience_years'] = employee_data.get('experience_years', {})
+                except:
+                    employee_data['skills'] = []
+                    employee_data['experience_years'] = {}
+
+        # 5. Auto-calculate missing completion fields if not provided
+        completion_dict = completion_data.dict()
+        
+        # Handle simple confirmation format (backward compatibility)
+        if completion_dict.get('confirm') is not None and completion_dict.get('completed') is None:
+            completion_dict['completed'] = completion_dict.get('confirm', True)
+        
+        # Auto-calculate on_time if not provided
+        if completion_dict.get('on_time') is None:
+            due_date_str = task.get('due_date')
+            if due_date_str:
+                try:
+                    if isinstance(due_date_str, str):
+                        if due_date_str.endswith('Z'):
+                            due_date = datetime.fromisoformat(due_date_str.replace('Z', '+00:00'))
+                        else:
+                            due_date = datetime.fromisoformat(due_date_str)
+                    else:
+                        due_date = due_date_str
+                    
+                    now = datetime.now(timezone.utc)
+                    completion_dict['on_time'] = now <= due_date
+                except:
+                    completion_dict['on_time'] = True  # Default to on-time if calculation fails
+            else:
+                completion_dict['on_time'] = True  # No due date = on time
+        
+        # Auto-calculate overdue_days if not provided
+        if completion_dict.get('overdue_days', 0) == 0 and not completion_dict.get('on_time', True):
+            due_date_str = task.get('due_date')
+            if due_date_str:
+                try:
+                    if isinstance(due_date_str, str):
+                        if due_date_str.endswith('Z'):
+                            due_date = datetime.fromisoformat(due_date_str.replace('Z', '+00:00'))
+                        else:
+                            due_date = datetime.fromisoformat(due_date_str)
+                    else:
+                        due_date = due_date_str
+                    
+                    now = datetime.now(timezone.utc)
+                    if now > due_date:
+                        completion_dict['overdue_days'] = (now - due_date).days
+                except:
+                    completion_dict['overdue_days'] = 0
+        
+        # Auto-calculate good_behavior if not provided (based on completion time vs difficulty)
+        if not completion_dict.get('good_behavior', False):
+            created_at_str = task.get('created_at')
+            if created_at_str:
+                try:
+                    if isinstance(created_at_str, str):
+                        if created_at_str.endswith('Z'):
+                            created_at = datetime.fromisoformat(created_at_str.replace('Z', '+00:00'))
+                        else:
+                            created_at = datetime.fromisoformat(created_at_str)
+                    else:
+                        created_at = created_at_str
+                    
+                    now = datetime.now(timezone.utc)
+                    completion_time_days = (now - created_at).days
+                    difficulty = task.get('difficulty_score', 1)
+                    expected_days = max(1, difficulty * 2)
+                    
+                    if completion_time_days <= expected_days:
+                        completion_dict['good_behavior'] = True
+                except:
+                    pass  # Keep default False
+        
+        # Calculate reward
+        reward = calculate_task_reward(task, employee_data, completion_dict)
+        print(f"🎯 Calculated reward for task {task_id}: {reward:.3f}")
+
+        # 6. Update task status to completed
+        update_data = {
+            'status': 'done',
+            'updated_at': datetime.now(timezone.utc).isoformat()
+        }
+
+        # Add completion rating if provided
+        if completion_data.user_rating is not None:
+            update_data['rating_score'] = completion_data.user_rating
+
+        task_update_response = supabase_client.table('tasks').update(
+            update_data
+        ).eq('id', task_id).execute()
+
+        if not task_update_response.data:
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="Failed to update task completion status"
+            )
+
+        # 7. Store reward in RL feedback table
+        rl_feedback_data = {
+            'task_id': task_id,
+            'employee_id': task.get('assigned_to'),
+            'r_completion': completion_data.completed,
+            'r_ontime': completion_data.on_time,
+            'r_good_behaviour': completion_data.good_behavior,
+            'p_overdue': completion_data.overdue_days > 0,
+            'p_rework': completion_data.rework_required,
+            'p_failure': completion_data.failed,
+            'reward_value': reward,  # Clipped reward value
+            'raw_reward': reward,    # Same as reward_value since we always clip
+            'user_rating': completion_data.user_rating,
+            'overdue_days': completion_data.overdue_days,
+            'completion_notes': completion_data.completion_notes,
+            'created_at': datetime.now(timezone.utc).isoformat()
+        }
+
+        # Add context features if available
+        if task.get('assigned_to') and employee_data:
+            try:
+                bandit_agent = get_contextual_bandit_agent()
+                context_features = bandit_agent.get_context_features(task, employee_data)
+                rl_feedback_data['context_features'] = context_features.flatten().tolist()
+            except Exception as e:
+                print(f"⚠️ Failed to extract context features: {e}")
+
+        rl_response = supabase_client.table('rl_miles').insert(rl_feedback_data).execute()
+        if not rl_response.data:
+            print(f"⚠️ Warning: Failed to store RL feedback for task {task_id}")
+
+        # 8. Update bandit model if employee was assigned
+        if task.get('assigned_to') and employee_data:
+            try:
+                bandit_agent = get_contextual_bandit_agent()
+
+                # Get context features
+                context_features = bandit_agent.get_context_features(task, employee_data)
+
+                # Update model with reward
+                bandit_agent.update_model(task['assigned_to'], context_features, reward)
+
+                print(f"🤖 Updated bandit model for employee {task['assigned_to']} with reward {reward:.3f}")
+
+            except Exception as e:
+                print(f"⚠️ Failed to update bandit model: {e}")
+
+        # 9. Update employee workload score
+        if task.get('assigned_to'):
+            try:
+                workload_calculator = get_workload_score_calculator()
+                success = workload_calculator.update_employee_workload_score(
+                    task['assigned_to'], supabase_client
+                )
+                if success:
+                    print(f"✅ Updated workload score for employee {task['assigned_to']}")
+            except Exception as e:
+                print(f"⚠️ Error updating workload score: {e}")
+
+        # Success response
+        return {
+            "success": True,
+            "message": "Task completed successfully",
+            "data": {
+                "task_id": task_id,
+                "reward_calculated": reward,
+                "completion_status": completion_data.dict(),
+                "bandit_updated": task.get('assigned_to') is not None
+            }
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"Task completion error: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Internal server error occurred while completing task"
         )
 
 

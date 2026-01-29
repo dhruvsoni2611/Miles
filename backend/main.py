@@ -235,19 +235,19 @@ app = FastAPI(
 try:
     from routers.employee_management import router as employee_router
 except ImportError:
+    # Fallback for direct execution
+    import sys
+    import os
+    backend_dir = os.path.dirname(__file__)
+    if backend_dir not in sys.path:
+        sys.path.insert(0, backend_dir)
     try:
-        # Fallback for direct execution
-        import sys
-        import os
-        backend_dir = os.path.dirname(__file__)
-        if backend_dir not in sys.path:
-            sys.path.insert(0, backend_dir)
         from routers.employee_management import router as employee_router
-    except ImportError:
+    except ImportError as e:
         # Last resort - create empty router to prevent crashes
         from fastapi import APIRouter
         employee_router = APIRouter()
-        print("Warning: Could not import employee_management router")
+        print(f"Warning: Could not import employee_management router: {e}")
 
 app.include_router(employee_router, prefix="/api", tags=["Employee Management"])
 
@@ -269,229 +269,7 @@ async def root():
 async def health_check():
     return {"status": "healthy"}
 
-# Test CORS endpoint
-@app.get("/api/test/cors")
-async def test_cors():
-    return {"message": "CORS is working!", "origin": "allowed"}
-
-# Test endpoint to check Supabase Auth users
-@app.get("/api/test/users")
-async def test_users():
-    """Test endpoint to check Supabase Auth users (admin only)"""
-    try:
-        # This endpoint should be protected, but for testing we'll allow it
-        users_response = supabase_admin.auth.admin.list_users()
-        users = []
-
-        for user in users_response:
-            users.append({
-                "id": user.id,
-                "email": user.email,
-                "role": user.user_metadata.get('role', 'employee') if user.user_metadata else 'employee',
-                "name": user.user_metadata.get('name', '') if user.user_metadata else '',
-                "created_at": user.created_at,
-                "email_confirmed_at": user.email_confirmed_at
-            })
-
-        return {
-            "success": True,
-            "users": users,
-            "count": len(users)
-        }
-    except Exception as e:
-        return {
-            "success": False,
-            "error": str(e)
-        }
-
-# Test endpoint to check Supabase connection
-@app.get("/api/test/connection")
-async def test_connection():
-    """Test endpoint to check Supabase connection"""
-    try:
-        # Try to get user count from auth
-        users_response = supabase_admin.auth.admin.list_users()
-        user_count = len(users_response) if users_response else 0
-
-        return {
-            "success": True,
-            "message": "Supabase connection successful",
-            "user_count": user_count,
-            "env_vars": {
-                "supabase_url": bool(SUPABASE_URL),
-                "supabase_anon_key": bool(SUPABASE_ANON_KEY),
-                "supabase_service_role_key": bool(SUPABASE_SERVICE_ROLE_KEY)
-            }
-        }
-    except Exception as e:
-        return {
-            "success": False,
-            "error": str(e),
-            "env_vars": {
-                "supabase_url": bool(SUPABASE_URL),
-                "supabase_anon_key": bool(SUPABASE_ANON_KEY),
-                "supabase_service_role_key": bool(SUPABASE_SERVICE_ROLE_KEY)
-            }
-        }
-
-# Test login endpoint
-@app.post("/api/test/login")
-async def test_login(login_data: LoginRequest):
-    """Test login endpoint to check Supabase Auth"""
-    try:
-        # Use the actual login endpoint
-        response = await login(login_data)
-        return {
-            "success": True,
-            "message": "Login successful",
-            "data": response.dict()
-        }
-    except Exception as e:
-        return {
-            "success": False,
-            "error": str(e),
-            "message": "Login failed"
-        }
-
-# Test endpoint to check available tables
-@app.get("/api/test/tables")
-async def test_tables():
-    """Test endpoint to check what tables exist in the database"""
-    try:
-        # This is a simple way to check if tables exist by trying to query them
-        tables_to_check = ['taskadmin', 'users', 'user_miles']
-        results = {}
-
-        for table_name in tables_to_check:
-            try:
-                response = supabase.table(table_name).select('*').limit(1).execute()
-                results[table_name] = {
-                    "exists": True,
-                    "sample_data": response.data[0] if response.data else None,
-                    "record_count": len(response.data) if response.data else 0
-                }
-            except Exception as e:
-                results[table_name] = {
-                    "exists": False,
-                    "error": str(e)
-                }
-
-        return {
-            "success": True,
-            "tables_checked": tables_to_check,
-            "results": results
-        }
-    except Exception as e:
-        return {
-            "success": False,
-            "error": str(e)
-        }
-
-# Endpoint to check table schema and help setup
-@app.get("/api/test/schema")
-async def check_table_schema():
-    """Check the schema/columns of task_admins table and provide setup guidance"""
-    try:
-        # Try to get a sample record to see the structure
-        response = supabase.table('task_admins').select('*').limit(1).execute()
-
-        if response.data and len(response.data) > 0:
-            sample_record = response.data[0]
-            columns = list(sample_record.keys())
-
-            # Analyze the structure
-            analysis = {
-                "has_username": "username" in columns,
-                "has_password": "password" in columns or "password_hash" in columns,
-                "has_role": "role" in columns,
-                "has_is_active": "is_active" in columns,
-                "has_email": "email" in columns,
-                "has_name": "name" in columns
-            }
-
-            return {
-                "success": True,
-                "columns": columns,
-                "sample_data": sample_record,
-                "structure_analysis": analysis,
-                "recommendations": get_recommendations(analysis)
-            }
-        else:
-            # Table is empty, try to determine schema by attempting inserts
-            return await analyze_empty_table()
-
-    except Exception as e:
-        return {
-            "success": False,
-            "error": str(e),
-            "suggestions": [
-                "Check if task_admins table exists in your Supabase database",
-                "Verify your SUPABASE_URL and SUPABASE_ANON_KEY in .env file",
-                "Ensure you have proper permissions to access the table"
-            ]
-        }
-
-async def analyze_empty_table():
-    """Analyze an empty table to determine its structure"""
-    test_cases = [
-        {"username": "test_user", "password": "test123"},
-        {"username": "test_user", "password": "test123", "role": "admin"},
-        {"username": "test_user", "password": "test123", "role": "admin", "is_active": True},
-        {"username": "test_user", "password": "test123", "role": "admin", "is_active": True, "email": "test@example.com"},
-        {"username": "test_user", "password": "test123", "role": "admin", "is_active": True, "email": "test@example.com", "name": "Test User"}
-    ]
-
-    working_fields = set()
-    failed_fields = set()
-
-    for test_data in test_cases:
-        try:
-            # Try to insert
-            response = supabase.table('task_admins').insert(test_data).execute()
-            if response.data:
-                # Success! Delete the test record
-                supabase.table('task_admins').delete().eq('username', 'test_user').execute()
-                working_fields.update(test_data.keys())
-            break
-        except Exception as e:
-            error_str = str(e)
-            # Check which fields are missing
-            for field in test_data.keys():
-                if f"'{field}'" in error_str and "column" in error_str:
-                    failed_fields.add(field)
-
-    # Determine which fields are supported
-    supported_fields = working_fields - failed_fields
-
-    return {
-        "success": True,
-        "message": "Table exists but is empty",
-        "supported_fields": list(supported_fields),
-        "unsupported_fields": list(failed_fields),
-        "recommendations": [
-            f"Your table supports these fields: {', '.join(supported_fields)}",
-            "Add at least one user with username and password to test authentication",
-            "Consider adding 'role' field for admin/employee access control"
-        ]
-    }
-
-def get_recommendations(analysis):
-    """Get recommendations based on table structure analysis"""
-    recommendations = []
-
-    if not analysis["has_username"]:
-        recommendations.append("Add 'username' column for user identification")
-    if not analysis["has_password"] and not analysis["has_password"]:
-        recommendations.append("Add 'password' or 'password_hash' column for authentication")
-    if not analysis["has_role"]:
-        recommendations.append("Add 'role' column for access control (admin/employee)")
-    if not analysis["has_is_active"]:
-        recommendations.append("Add 'is_active' column for user status management")
-
-    if len(recommendations) == 0:
-        recommendations.append("Table structure looks good for authentication!")
-
-    return recommendations
+# Test endpoints and helper functions removed - use production endpoints instead
 
 # Authentication Endpoints
 @app.post("/api/auth/login", response_model=TokenResponse)
@@ -682,7 +460,7 @@ async def verify_token(current_user: dict = Depends(get_current_user)):
 async def get_dashboard_stats(current_user: dict = Depends(get_current_user)):
     """Get dashboard statistics for the current admin user"""
     try:
-        profile_id = current_user['id']
+        profile_id = current_user.id
 
         # Get task statistics
         tasks_response = supabase_admin.table('tasks').select('status, priority_score, due_date').eq('created_by', profile_id).execute()
@@ -736,52 +514,7 @@ async def get_dashboard_stats(current_user: dict = Depends(get_current_user)):
         print(f"Dashboard stats error: {e}")
         raise HTTPException(status_code=500, detail="Failed to fetch dashboard statistics")
 
-# Tasks API
-@app.post("/api/tasks", response_model=TaskResponse)
-async def create_task(task_data: TaskBase, current_user = Depends(get_current_user)):
-    """Create a new task"""
-    try:
-        # Get current user ID
-        user_id = current_user.id
-
-        # Validate required skills if provided
-        if task_data.required_skills and len(task_data.required_skills) > 0:
-            # Check if all provided skills exist in the skills table
-            skills_response = supabase.table('skills').select('name').in_('name', task_data.required_skills).execute()
-            existing_skills = [skill['name'] for skill in skills_response.data or []]
-
-            # Find invalid skills
-            invalid_skills = [skill for skill in task_data.required_skills if skill not in existing_skills]
-
-            if invalid_skills:
-                raise HTTPException(
-                    status_code=400,
-                    detail=f"Invalid skills provided: {', '.join(invalid_skills)}. Please select skills from the available options."
-                )
-
-        # Prepare task data for insertion
-        task_dict = task_data.dict()
-        task_dict['created_by'] = user_id
-        task_dict['assigned_to'] = task_dict.get('assigned_to') or user_id
-
-        # Convert date objects to ISO format for Supabase
-        if task_dict.get('due_date') and isinstance(task_dict['due_date'], datetime):
-            task_dict['due_date'] = task_dict['due_date'].isoformat()
-
-        # Insert task into database
-        response = supabase_admin.table('tasks').insert(task_dict).execute()
-
-        if not response.data or len(response.data) == 0:
-            raise HTTPException(status_code=500, detail="Failed to create task")
-
-        created_task = response.data[0]
-        return TaskResponse(**created_task)
-
-    except HTTPException:
-        raise
-    except Exception as e:
-        print(f"Create task error: {e}")
-        raise HTTPException(status_code=500, detail="Failed to create task")
+# Tasks API - POST /api/tasks is handled by employee_management router (has skill embeddings, workload updates)
 
 @app.get("/api/tasks")
 async def get_tasks(
@@ -1060,178 +793,7 @@ async def update_task(task_id: str, task_data: TaskUpdate, current_user = Depend
         raise HTTPException(status_code=500, detail="Failed to update task")
 
 
-@app.post("/api/tasks/{task_id}/complete")
-async def complete_task_with_auto_rl_feedback(
-    task_id: str,
-    confirmation: TaskCompletionConfirmation,
-    current_user = Depends(get_current_user)
-):
-    """Complete task and automatically calculate RL feedback based on task performance"""
-    try:
-        # Get comprehensive task details
-        task_response = supabase_admin.table('tasks').select(
-            'id, title, assigned_to, created_by, due_date, difficulty_score, status, created_at, priority_score'
-        ).eq('id', task_id).execute()
-
-        if not task_response.data:
-            raise HTTPException(status_code=404, detail="Task not found")
-
-        task = task_response.data[0]
-
-        # Verify user can complete this task (assigned to them or created by them)
-        user_id = current_user.id
-        can_complete = False
-
-        if task.get('assigned_to') == user_id or task.get('created_by') == user_id:
-            can_complete = True
-        else:
-            # Check if user is manager of the task creator
-            manager_check = supabase_admin.table('user_reporting').select(
-                'manager_id'
-            ).eq('manager_id', user_id).eq('employee_id', task.get('created_by')).execute()
-
-            if manager_check.data and len(manager_check.data) > 0:
-                can_complete = True
-
-        if not can_complete:
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail="You can only complete tasks assigned to you or that you created"
-            )
-
-        # Calculate completion time (days from creation to completion)
-        completion_time_days = 0
-        if task.get('created_at'):
-            created_at = datetime.fromisoformat(task['created_at'].replace('Z', '+00:00'))
-            now = datetime.now(timezone.utc)
-            completion_time_days = (now - created_at).days
-
-        # Calculate RL metrics based on task performance
-
-        # 1. COMPLETION REWARD: Always true for completed tasks
-        r_completion = True
-
-        # 2. ON-TIME REWARD: Check if completed before due date
-        r_ontime = True
-        overdue_days = 0
-        if task.get('due_date'):
-            due_date = datetime.fromisoformat(task['due_date'].replace('Z', '+00:00'))
-            if now > due_date:
-                r_ontime = False
-                overdue_days = (now - due_date).days
-
-        # 3. GOOD BEHAVIOUR REWARD: Based on completion time vs difficulty
-        r_good_behaviour = False
-        difficulty = task.get('difficulty_score', 1)
-
-        # Logic: Good behaviour if completed within reasonable time for difficulty
-        expected_days = max(1, difficulty * 2)  # Expected: difficulty * 2 days
-        if completion_time_days <= expected_days:
-            r_good_behaviour = True
-
-        # 4. HARD TASK BONUS: Extra reward for completing difficult tasks
-        r_hardtask_bonus = difficulty > 5
-
-        # 5. EFFICIENCY BONUS: Bonus for completing high-priority tasks quickly
-        priority = task.get('priority_score', 2)
-        r_efficiency_bonus = priority >= 4 and completion_time_days <= 2  # High priority completed within 2 days
-
-        # 6. PENALTIES
-        p_overdue = overdue_days > 0
-        p_rework = 0  # Will be updated if task gets reworked later
-        p_failure = False  # This is completion, so no failure
-
-        # 7. SPEED BONUS: Bonus for completing tasks very quickly
-        r_speed_bonus = completion_time_days <= 1 and difficulty <= 3
-
-        # Update task status to 'done'
-        if task.get('status') != 'done':
-            update_response = supabase_admin.table('tasks').update({
-                'status': 'done',
-                'updated_at': datetime.utcnow().isoformat()
-            }).eq('id', task_id).execute()
-
-            if not update_response.data:
-                raise HTTPException(status_code=500, detail="Failed to update task status")
-
-            # Update assignments table to mark completion
-            if task.get('assigned_to'):
-                try:
-                    # Get user_miles.id for the assigned employee
-                    employee_profile = supabase_admin.table('user_miles').select('id').eq('auth_id', task['assigned_to']).execute()
-                    if employee_profile.data:
-                        employee_id = employee_profile.data[0]['id']
-                        # Update the assignment record with completion timestamp
-                        assignment_update = supabase_admin.table('assignments').update({
-                            'completed_at': datetime.now(timezone.utc).isoformat()
-                        }).eq('task_id', task_id).eq('user_id', employee_id).execute()
-                        if not assignment_update.data:
-                            print(f"⚠️ Warning: Failed to update assignment completion for task {task_id}")
-                except Exception as e:
-                    print(f"⚠️ Error updating assignment completion: {e}")
-
-        # Get the correct user_miles.id for the assigned employee (assigned_to is auth_id)
-        employee_id_for_rl = None
-        if task.get('assigned_to'):
-            user_profile = supabase_admin.table('user_miles').select('id').eq('auth_id', task['assigned_to']).execute()
-            if user_profile.data and len(user_profile.data) > 0:
-                employee_id_for_rl = user_profile.data[0]['id']
-
-        # Insert RL feedback according to your exact schema
-        rl_data = {
-            'task_id': task_id,
-            'employee_id': employee_id_for_rl,
-            'r_completion': r_completion,
-            'r_ontime': r_ontime,
-            'r_good_behaviour': r_good_behaviour,
-            'p_overdue': p_overdue,
-            'p_rework': p_rework,
-            'p_failure': p_failure
-        }
-
-        # Insert RL feedback (your schema doesn't have unique constraint on task_id)
-        rl_response = supabase_admin.table('rl_miles').insert(rl_data).execute()
-
-        if not rl_response.data:
-            print(f"⚠️ Warning: RL feedback upsert failed for task {task_id}")
-
-        # Return detailed feedback about what was calculated (only schema fields)
-        calculated_metrics = {
-            'completion_time_days': completion_time_days,
-            'overdue_days': overdue_days,
-            'difficulty': difficulty,
-            'priority': priority,
-            'rewards': {
-                'r_completion': r_completion,
-                'r_ontime': r_ontime,
-                'r_good_behaviour': r_good_behaviour
-            },
-            'penalties': {
-                'p_overdue': p_overdue,
-                'p_rework': p_rework,
-                'p_failure': p_failure
-            }
-        }
-
-        return {
-            "success": True,
-            "message": "Task completed successfully with automatic performance evaluation",
-            "data": {
-                "task_id": task_id,
-                "calculated_metrics": calculated_metrics,
-                "rl_feedback_recorded": bool(rl_response.data)
-            }
-        }
-
-    except HTTPException:
-        raise
-    except Exception as e:
-        print(f"Task completion error: {e}")
-        print(f"Task ID: {task_id}")
-        print(f"User ID: {current_user.id}")
-        import traceback
-        print(f"Traceback: {traceback.format_exc()}")
-        raise HTTPException(status_code=500, detail="Failed to complete task")
+# POST /api/tasks/{task_id}/complete is handled by employee_management router (has RL reward calculation with bandit)
 
 
 @app.delete("/api/tasks/{task_id}")
@@ -1256,72 +818,7 @@ async def delete_task(task_id: str, current_user = Depends(get_current_user)):
         print(f"Delete task error: {e}")
         raise HTTPException(status_code=500, detail="Failed to delete task")
 
-# Test assignment creation directly
-@app.post("/api/test-direct-assignment")
-async def test_direct_assignment():
-    """Test assignment creation directly"""
-    try:
-        from routers.employee_management import get_supabase_admin
-        supabase_client = get_supabase_admin()
-
-        # Create a test assignment record
-        test_assignment = {
-            'task_id': '550e8400-e29b-41d4-a716-446655440000',  # dummy UUID
-            'user_id': '550e8400-e29b-41d4-a716-446655440001',  # dummy UUID
-            'assigned_by': '550e8400-e29b-41d4-a716-446655440002', # dummy UUID
-            'assigned_at': '2024-01-01T12:00:00.000Z'
-        }
-
-        print(f"DEBUG: Testing direct assignment creation: {test_assignment}")
-        response = supabase_client.table("assignments").insert(test_assignment).execute()
-        print(f"DEBUG: Direct assignment response: {response}")
-
-        return {
-            "success": True,
-            "test_assignment": test_assignment,
-            "response": response.data,
-            "message": "Direct assignment creation test completed"
-        }
-
-    except Exception as e:
-        print(f"Direct assignment test error: {e}")
-        import traceback
-        traceback.print_exc()
-        return {"success": False, "error": str(e)}
-
-# Simple test assignment creation
-@app.post("/api/test-create-assignment")
-async def test_create_assignment():
-    """Test assignment creation with known good data"""
-    try:
-        from routers.employee_management import get_supabase_admin
-        supabase_client = get_supabase_admin()
-
-        # Create assignment with hardcoded test data
-        test_assignment = {
-            'task_id': '550e8400-e29b-41d4-a716-446655440000',  # dummy task ID
-            'user_id': '35ece19f-d073-46d5-9d19-a26424895a74',   # real user ID (from your data)
-            'assigned_by': '58d91fe2-1401-46fd-b183-a2a118997fc1', # real user ID
-            'assigned_at': '2024-01-01T12:00:00.000Z'
-        }
-
-        print(f"SIMPLE TEST: Creating assignment: {test_assignment}")
-        response = supabase_client.table("assignments").insert(test_assignment).execute()
-        print(f"SIMPLE TEST: Response: {response}")
-        print(f"SIMPLE TEST: Response data: {response.data}")
-
-        return {
-            "success": True,
-            "test_assignment": test_assignment,
-            "response": response.data,
-            "message": "Simple assignment creation test completed"
-        }
-
-    except Exception as e:
-        print(f"SIMPLE TEST ERROR: {e}")
-        import traceback
-        traceback.print_exc()
-        return {"success": False, "error": str(e)}
+# Test endpoints removed - use production endpoints instead
 
 # Create assignment record
 @app.post("/api/assignments")
@@ -1357,40 +854,7 @@ async def create_assignment(assignment: dict, current_user = Depends(get_current
         print(f"Assignment creation error: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
-# Check assignments table data
-@app.get("/api/check-assignments")
-async def check_assignments():
-    """Check current state of assignments table"""
-    try:
-        from routers.employee_management import get_supabase_admin
-        supabase_client = get_supabase_admin()
-
-        # Get all assignments
-        assignments = supabase_client.table("assignments").select("*").limit(20).execute()
-
-        # Get tasks with assignments
-        tasks_with_assignments = supabase_client.table("tasks").select("*").not_("assigned_to", "is", None).limit(10).execute()
-
-        return {
-            "success": True,
-            "assignments_count": len(assignments.data) if assignments.data else 0,
-            "assignments": assignments.data,
-            "tasks_with_assignments_count": len(tasks_with_assignments.data) if tasks_with_assignments.data else 0,
-            "tasks_with_assignments": [
-                {
-                    "id": task["id"],
-                    "title": task["title"],
-                    "assigned_to": task["assigned_to"],
-                    "created_by": task["created_by"]
-                } for task in (tasks_with_assignments.data or [])
-            ]
-        }
-
-    except Exception as e:
-        print(f"Check assignments error: {e}")
-        import traceback
-        traceback.print_exc()
-        return {"success": False, "error": str(e)}
+# Test endpoint removed - use production endpoints instead
 
 # Employees API
 @app.get("/api/employees/managed")
@@ -1446,154 +910,9 @@ async def get_managed_employees(current_user = Depends(get_current_user)):
         raise HTTPException(status_code=500, detail=f"Failed to fetch managed employees: {str(e)}")
 
 
-@app.get("/api/employees")
-async def get_employees(
-    status: Optional[str] = None,
-    department: Optional[str] = None,
-    search: Optional[str] = None,
-    current_user: dict = Depends(get_current_user)
-):
-    """Get employees for the current admin user with optional filters"""
-    try:
-        profile_id = current_user['id']
-        query = supabase.table('employees').select('*').eq('profile_id', profile_id)
-
-        # Apply filters
-        if status:
-            query = query.eq('status', status)
-        if department:
-            query = query.ilike('department', f'%{department}%')
-
-        response = query.execute()
-        employees = response.data or []
-
-        # Apply search filter if provided
-        if search:
-            search_term = search.lower()
-            employees = [
-                emp for emp in employees
-                if search_term in emp.get('name', '').lower() or
-                   search_term in emp.get('email', '').lower() or
-                   search_term in emp.get('employee_code', '').lower()
-            ]
-
-        # Sort in descending order (most recent first)
-        employees.sort(key=lambda x: x.get('created_at', ''), reverse=True)
-
-        return {"employees": employees, "total": len(employees)}
-
-    except Exception as e:
-        print(f"Get employees error: {e}")
-        raise HTTPException(status_code=500, detail="Failed to fetch employees")
-
-@app.post("/api/employees", response_model=EmployeeResponse)
-async def create_employee(employee_data: EmployeeCreate, current_user: dict = Depends(get_current_user)):
-    """Create a new employee"""
-    try:
-        profile_id = current_user['id']
-
-        # Generate employee code (EMP001, EMP002, etc.)
-        employees_response = supabase.table('employees').select('employee_code').eq('profile_id', profile_id).execute()
-        existing_codes = [emp['employee_code'] for emp in (employees_response.data or [])]
-
-        # Find next available code
-        code_number = 1
-        while f'EMP{code_number:03d}' in existing_codes:
-            code_number += 1
-
-        employee_code = f'EMP{code_number:03d}'
-
-        employee_dict = employee_data.dict()
-        employee_dict['profile_id'] = profile_id
-        employee_dict['employee_code'] = employee_code
-        employee_dict['status'] = 'active'
-        employee_dict['is_active'] = True
-
-        response = supabase.table('employees').insert(employee_dict).execute()
-
-        if not response.data or len(response.data) == 0:
-            raise HTTPException(status_code=500, detail="Failed to create employee")
-
-        created_employee = response.data[0]
-        return EmployeeResponse(**created_employee)
-
-    except HTTPException:
-        raise
-    except Exception as e:
-        print(f"Create employee error: {e}")
-        raise HTTPException(status_code=500, detail="Failed to create employee")
-
-@app.get("/api/employees/{employee_id}", response_model=EmployeeResponse)
-async def get_employee(employee_id: str, current_user: dict = Depends(get_current_user)):
-    """Get a specific employee"""
-    try:
-        profile_id = current_user['id']
-
-        response = supabase.table('employees').select('*').eq('id', employee_id).eq('profile_id', profile_id).execute()
-
-        if not response.data or len(response.data) == 0:
-            raise HTTPException(status_code=404, detail="Employee not found")
-
-        return EmployeeResponse(**response.data[0])
-
-    except HTTPException:
-        raise
-    except Exception as e:
-        print(f"Get employee error: {e}")
-        raise HTTPException(status_code=500, detail="Failed to fetch employee")
-
-@app.put("/api/employees/{employee_id}", response_model=EmployeeResponse)
-async def update_employee(employee_id: str, employee_data: EmployeeUpdate, current_user: dict = Depends(get_current_user)):
-    """Update an employee"""
-    try:
-        profile_id = current_user['id']
-
-        # Check if employee exists and belongs to user
-        existing_response = supabase.table('employees').select('id').eq('id', employee_id).eq('profile_id', profile_id).execute()
-
-        if not existing_response.data or len(existing_response.data) == 0:
-            raise HTTPException(status_code=404, detail="Employee not found")
-
-        # Update employee
-        update_dict = employee_data.dict(exclude_unset=True)
-        update_dict['updated_at'] = datetime.utcnow().isoformat()
-
-        response = supabase.table('employees').update(update_dict).eq('id', employee_id).eq('profile_id', profile_id).execute()
-
-        if not response.data or len(response.data) == 0:
-            raise HTTPException(status_code=500, detail="Failed to update employee")
-
-        updated_employee = response.data[0]
-        return EmployeeResponse(**updated_employee)
-
-    except HTTPException:
-        raise
-    except Exception as e:
-        print(f"Update employee error: {e}")
-        raise HTTPException(status_code=500, detail="Failed to update employee")
-
-@app.delete("/api/employees/{employee_id}")
-async def delete_employee(employee_id: str, current_user: dict = Depends(get_current_user)):
-    """Delete an employee"""
-    try:
-        profile_id = current_user['id']
-
-        # Check if employee exists and belongs to user
-        existing_response = supabase.table('employees').select('id').eq('id', employee_id).eq('profile_id', profile_id).execute()
-
-        if not existing_response.data or len(existing_response.data) == 0:
-            raise HTTPException(status_code=404, detail="Employee not found")
-
-        # Delete employee
-        response = supabase.table('employees').delete().eq('id', employee_id).eq('profile_id', profile_id).execute()
-
-        return {"message": "Employee deleted successfully"}
-
-    except HTTPException:
-        raise
-    except Exception as e:
-        print(f"Delete employee error: {e}")
-        raise HTTPException(status_code=500, detail="Failed to delete employee")
+# Employee CRUD endpoints removed - these used non-existent 'employees' table
+# Employee management is handled by employee_management router (uses user_miles + Supabase Auth)
+# GET /api/employees/managed is kept (uses user_miles table correctly)
 
 # Skills API Endpoints
 @app.get("/api/skills/categories")
@@ -1671,7 +990,7 @@ async def user_profile(current_user: dict = Depends(get_current_user)):
 @app.post("/api/langgraph/workflow")
 async def run_workflow(data: dict, current_user: dict = Depends(get_current_user)):
     # Placeholder for LangGraph workflow
-    return {"result": "Workflow executed", "data": data, "user": current_user["email"]}
+    return {"result": "Workflow executed", "data": data, "user": getattr(current_user, "email", "")}
 
 if __name__ == "__main__":
     port = int(os.getenv("PORT", 8000))
