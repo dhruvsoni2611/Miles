@@ -107,14 +107,6 @@ const Dashboard = () => {
         return;
       }
 
-      // Check user role - allow managers and admins to access dashboard
-      if (!user || (user.role !== 'manager' && user.role !== 'admin')) {
-        console.log('Dashboard: User does not have required role (manager/admin)');
-        alert('Access denied. Only managers and administrators can access the dashboard.');
-        navigate('/login');
-        return;
-      }
-
       console.log('Dashboard: Authentication successful for user:', user.email, 'role:', user.role);
 
       // Fetch tasks based on view mode
@@ -349,7 +341,8 @@ const Dashboard = () => {
         difficulty_score: newTask.difficulty_score,
         status: newTask.status,
         due_date: newTask.due_date ? newTask.due_date.toISOString() : null,
-        required_skills: [], // Can be extended later
+        project_id: newTask.project_id || null,
+        required_skills: newTask.required_skills || [],
         assigned_to: createTaskAssignmentMode === 'manual' ? (newTask.assigned_to || null) : null,
         rating_score: 0,
         justified: false,

@@ -1,24 +1,11 @@
 import React from 'react';
-import SkillsSelection from './SkillsSelection';
 
 const TenureInput = ({
   selectedSkills = [],
   tenureData = {},
   onTenureChange,
-  onSkillsChange,
-  placeholder = "Select skills for tenure tracking..."
+  placeholder = "Same skills as experience above. Enter years at this company for each."
 }) => {
-  const handleSkillSelectionChange = (skills) => {
-    // When skills change, we need to clean up tenure data for skills that are no longer selected
-    const newTenureData = {};
-    skills.forEach(skill => {
-      if (tenureData[skill] !== undefined) {
-        newTenureData[skill] = tenureData[skill];
-      }
-    });
-    onTenureChange(newTenureData);
-  };
-
   const handleTenureChange = (skill, years, months) => {
     // Convert years and months to total months
     const totalMonths = (parseInt(years) || 0) * 12 + (parseInt(months) || 0);
@@ -44,22 +31,26 @@ const TenureInput = ({
     };
   };
 
+  if (selectedSkills.length === 0) {
+    return (
+      <div className="space-y-4">
+        <label className="block text-sm font-medium text-gray-700 mb-2">
+          Company Tenure
+        </label>
+        <p className="text-sm text-gray-500 italic">{placeholder}</p>
+      </div>
+    );
+  }
+
   return (
     <div className="space-y-4">
       <div>
         <label className="block text-sm font-medium text-gray-700 mb-2">
-          Company Tenure Skills
+          Company Tenure
         </label>
         <p className="text-xs text-gray-500 mb-3">
-          Select the skills for which you want to track company-specific tenure
+          Same skills as experience. Enter years at this company for each (years may differ from total experience).
         </p>
-
-        {/* Skills selection for tenure tracking */}
-        <SkillsSelection
-          selectedSkills={selectedSkills}
-          onSkillsChange={onSkillsChange || handleSkillSelectionChange}
-          placeholder={placeholder}
-        />
       </div>
 
       {selectedSkills.length > 0 && (

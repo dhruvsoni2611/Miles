@@ -19,8 +19,22 @@ const EmployeeManagement = () => {
     tenure_years: {}
   });
 
-  // Tenure skills state (separate from main skills)
-  const [tenureSkills, setTenureSkills] = useState([]);
+  // Sync tenure with experience skills in realtime: remove tenure entries for skills no longer selected
+  useEffect(() => {
+    if (!showEmployeeModal) return;
+    const skillSet = new Set(newEmployee.skill_vector);
+    const tenureKeys = Object.keys(newEmployee.tenure_years || {});
+    const hasOrphaned = tenureKeys.some(k => !skillSet.has(k));
+    if (hasOrphaned) {
+      const cleaned = {};
+      skillSet.forEach(skill => {
+        if (newEmployee.tenure_years[skill] !== undefined) {
+          cleaned[skill] = newEmployee.tenure_years[skill];
+        }
+      });
+      setNewEmployee(prev => ({ ...prev, tenure_years: cleaned }));
+    }
+  }, [newEmployee.skill_vector, showEmployeeModal]);
 
   // Fetch managed employees from API
   const fetchManagedEmployees = async () => {
@@ -161,7 +175,6 @@ const EmployeeManagement = () => {
         experience_years: {},
         tenure_years: {}
       });
-      setTenureSkills([]);
       setShowEmployeeModal(false);
 
       // Refresh the employee list
@@ -427,13 +440,12 @@ const EmployeeManagement = () => {
                       placeholder="No skills selected yet..."
                     />
 
-                    {/* Company Tenure */}
+                    {/* Company Tenure - uses same skills as experience */}
                     <TenureInput
-                      selectedSkills={tenureSkills}
+                      selectedSkills={newEmployee.skill_vector}
                       tenureData={newEmployee.tenure_years}
                       onTenureChange={(tenure) => setNewEmployee(prev => ({ ...prev, tenure_years: tenure }))}
-                      onSkillsChange={setTenureSkills}
-                      placeholder="Select skills for tenure tracking..."
+                      placeholder="Select skills above first. Tenure uses the same skills."
                     />
                   </div>
 

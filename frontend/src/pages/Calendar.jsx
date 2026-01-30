@@ -75,14 +75,6 @@ const Calendar = () => {
         return;
       }
 
-      // Check user role - allow managers and admins to access calendar
-      if (!user || (user.role !== 'manager' && user.role !== 'admin')) {
-        console.log('Calendar: User does not have required role (manager/admin)');
-        alert('Access denied. Only managers and administrators can access the calendar.');
-        navigate('/login');
-        return;
-      }
-
       console.log('Calendar: Authentication successful for user:', user.email, 'role:', user.role);
 
     } catch (error) {

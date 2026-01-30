@@ -26,7 +26,7 @@ try:
     from agents.workload_score import get_workload_score_calculator
     from agents.contextual_bandit import get_contextual_bandit_agent
     from agents.reward_calculation import calculate_task_reward
-    from agents.skill_similarity_filter import filter_employees_by_skill_similarity
+    from agents.skill_similarity_filter import filter_employees_by_skill_similarity, get_skill_similarity_filter
     ML_AGENTS_AVAILABLE = True
 except ImportError as e:
     # ML agents not available - routes that don't require them will still work
@@ -48,6 +48,8 @@ except ImportError as e:
     def calculate_task_reward(*args, **kwargs):
         raise ImportError("scikit-learn is required for reward calculation")
     def filter_employees_by_skill_similarity(*args, **kwargs):
+        raise ImportError("scikit-learn is required for skill similarity")
+    def get_skill_similarity_filter():
         raise ImportError("scikit-learn is required for skill similarity")
 
 # Supabase admin client - created lazily to avoid import issues
@@ -208,20 +210,15 @@ async def create_task(
                     detail="You can only assign tasks to employees you manage"
                 )
 
-        # Process task skills and generate embeddings
+        # Process task skills: generate OpenAI embeddings and save to skill_embedding
         skill_names = task.required_skills or []
-        skill_vector_data = None
-
-        if skill_names and len(skill_names) > 0:
-            # Generate embeddings for task skills
-            try:
-                skill_embeddings = create_skill_embeddings(', '.join(skill_names))
-                skill_vector_data = skill_embeddings  # Store just the vectors array
-                print(f"✅ Generated embeddings for {len(skill_embeddings) if skill_embeddings else 0} task skills")
-            except Exception as embedding_error:
-                print(f"⚠️ Failed to generate embeddings for task skills: {embedding_error}")
-                print("📝 Continuing with skill names only - embeddings will be generated later if needed")
-                skill_vector_data = []
+        skill_vector_data = []
+        if skill_names:
+            skill_vector_data = create_skill_embeddings(skill_names)
+            if skill_vector_data:
+                print(f"✅ Generated {len(skill_vector_data)} embeddings for task skills")
+            else:
+                print("⚠️ No task skill embeddings generated (OpenAI may be unavailable)")
 
         # 4. DATA PREPARATION
         # Handle both priority formats (priority string or priority_score int)
@@ -440,19 +437,29 @@ async def assign_task_to_employee(
                     )
 
                 # STAGE 1: SKILL SIMILARITY FILTER
-                # Filter to top 3 employees based on skill similarity using OpenAI embeddings
+                # Calculate cosine similarity for all employees, then take top 3 for bandit
                 print(f"🔍 Filtering {len(available_employees)} employees by skill similarity...")
-                top_employees = filter_employees_by_skill_similarity(
+                skill_filter = get_skill_similarity_filter()
+                all_with_scores = skill_filter.get_all_employee_similarities(
                     full_task_data,
-                    available_employees,
-                    top_k=3
+                    available_employees
                 )
 
-                if not top_employees:
+                if not all_with_scores:
                     print("⚠️ No employees passed skill similarity filter, using all employees")
                     top_employees = available_employees
                 else:
-                    print(f"✅ Filtered to top {len(top_employees)} employees by skill similarity")
+                    # Print total count and all employees with name and cosine similarity score
+                    total = len(all_with_scores)
+                    print(f"📊 Total employees calculated: {total}")
+                    print("📊 All employees by cosine similarity (name, score):")
+                    for emp, score in all_with_scores:
+                        name = emp.get('name', 'Unknown')
+                        print(f"   • {name}: {score:.3f}")
+                    # Take top 3 for bandit selection
+                    top_with_scores = all_with_scores[:3]
+                    top_employees = [emp for emp, _ in top_with_scores]
+                    print(f"✅ Using top {len(top_employees)} employees for bandit selection")
 
                 # STAGE 2: RL AGENT SELECTION
                 # Extract employee data for bandit (only top 3 from skill filter)
@@ -1191,29 +1198,16 @@ async def create_employee(
             else:
                 # User doesn't have a profile - create one
                 try:
-                    # Process skills: store both names and embeddings
-                    skill_names = []
-                    skill_embeddings = None
-
+                    # Process skills: generate OpenAI embeddings and save to skill_vector
+                    skill_vector_data = []
                     if employee.skill_vector and employee.skill_vector.strip():
-                        # Extract skill names from comma-separated string
-                        skill_names = [skill.strip() for skill in employee.skill_vector.split(',') if skill.strip()]
-
-                        # Generate embeddings for the skills
-                        try:
-                            skill_embeddings = create_skill_embeddings(employee.skill_vector)
-                            print(f"✅ Generated embeddings for {len(skill_embeddings) if skill_embeddings else 0} skills")
-                        except Exception as embedding_error:
-                            print(f"⚠️ Failed to generate embeddings: {embedding_error}")
-                            print("📝 Continuing with skill names only - embeddings will be generated later if needed")
-                            skill_embeddings = None
-
-                    # Store only the vectors in skill_vector field
-                    skill_vector_data = None
-                    if skill_embeddings:
-                        skill_vector_data = skill_embeddings  # Store just the vectors array
-                    else:
-                        skill_vector_data = []  # Empty array if no embeddings
+                        skill_names = [s.strip() for s in employee.skill_vector.split(',') if s.strip()]
+                        if skill_names:
+                            skill_vector_data = create_skill_embeddings(skill_names)
+                            if skill_vector_data:
+                                print(f"✅ Generated {len(skill_vector_data)} embeddings for {len(skill_names)} skills")
+                            else:
+                                print("⚠️ No embeddings generated (OpenAI may be unavailable)")
 
                     # Calculate productivity score based on experience and tenure
                     productivity_score = calculate_employee_productivity_score(
