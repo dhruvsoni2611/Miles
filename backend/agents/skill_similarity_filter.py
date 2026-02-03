@@ -61,30 +61,31 @@ class SkillSimilarityFilter:
         employee_embeddings: List[List[float]]
     ) -> float:
         """
-        Calculate average cosine similarity between task and employee skill embeddings.
+        Calculate cosine similarity between task and employee skill embeddings.
+        Uses best-match-per-task-skill: for each required task skill, finds the
+        employee's best matching skill, then averages those max values.
+        This favors specialists (direct skill match) over breadth (many tangentially related skills).
 
         Args:
             task_embeddings: List of task skill embeddings
             employee_embeddings: List of employee skill embeddings
 
         Returns:
-            Average cosine similarity score
+            Average of best-match similarities per task skill
         """
         if not task_embeddings or not employee_embeddings:
             return 0.0
 
-        similarities = []
-
-        # Compare each task skill with each employee skill
+        best_per_task = []
         for task_emb in task_embeddings:
-            for emp_emb in employee_embeddings:
-                similarity = self.calculate_cosine_similarity(task_emb, emp_emb)
-                similarities.append(similarity)
+            # Best match for this task skill across all employee skills
+            max_sim = max(
+                self.calculate_cosine_similarity(task_emb, emp_emb)
+                for emp_emb in employee_embeddings
+            )
+            best_per_task.append(max_sim)
 
-        # Return average similarity
-        if similarities:
-            return float(np.mean(similarities))
-        return 0.0
+        return float(np.mean(best_per_task))
 
     def get_task_skill_embeddings(self, task_data: Dict) -> List[List[float]]:
         """
